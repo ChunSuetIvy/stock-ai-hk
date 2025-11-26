@@ -24,68 +24,117 @@ class StockAnalysisPipeline:
         self.analysis_results = {}
         
     def analyze_single_stock(self, symbol):
-        """Complete analysis for one stock"""
+        """Complete analysis for one stock with robust error handling"""
         print(f"\n🔍 Analyzing {symbol}...")
-        
         results = {
             'symbol': symbol,
-            'timestamp': datetime.now().isoformat()
-        }
-        
-        # 1. Fetch price data
-        price_data = self.fetcher.fetch_stock_data(symbol, period="1mo")
-        
-        if price_data.empty:
-            print(f"  ❌ No price data available")
-            return None
+            'name': self.fetcher.stocks.get(symbol, symbol),
+            'timestamp': datetime.now().isoformat(),
+            'has_real_data': False,
+            'data_source': 'unknown'
+            }
+        try:
+            # 1. Fetch price data
+            price_data = self.fetcher.fetch_stock_data(symbol, period="1mo")
+            if price_data.empty:
+                print(f"  ⚠️ No price data available")
+                # Set default values to prevent crashes
+                results.update({
+                    'price': 0,
+                    'price_change': 0,
+                    'rsi': 50,
+                    'rsi_signal': 'NEUTRAL',
+                    'volume_unusual': False,
+                    'news_count': 0,
+                    'sentiment_score': 0,
+                    'sentiment_label': 'neutral',
+                    'positive_news': 0,
+                    'negative_news': 0,
+                    'combined_score': 0,
+                    'recommendation': 'NO DATA',
+                    'has_real_data': False,
+                    'data_source': 'none'
+                })
+                return results
+            # Track data source
+            results['data_source'] = price_data.attrs.get('data_source', 'unknown')
+            results['has_real_data'] = price_data.attrs.get('data_source') != 'fallback'
             
-        # 2. Technical analysis
-        analyzed_data = self.technical_analyzer.analyze_stock(price_data)
-        signals = self.technical_analyzer.get_current_signals(analyzed_data)
-        
-        results['price'] = price_data['Close'].iloc[-1]
-        results['price_change'] = price_data['Daily_Return'].iloc[-1] * 100 if 'Daily_Return' in price_data else 0
-        results['rsi'] = signals['RSI']['value'] if signals else 50
-        results['rsi_signal'] = signals['RSI']['signal'] if signals else 'Unknown'
-        results['volume_unusual'] = signals['Volume']['unusual'] if signals else False
-        
-        # 3. News collection
-        news = self.news_collector.search_company_news(symbol, days_back=7)
-        results['news_count'] = len(news)
-        
-        # 4. Sentiment analysis
-        if news:
-            sentiments = self.sentiment_analyzer.analyze_news_batch(news)
-            agg_sentiment = self.sentiment_analyzer.calculate_aggregate_sentiment(sentiments)
+            # 2. Technical analysis
+            analyzed_data = self.technical_analyzer.analyze_stock(price_data)
+            signals = self.technical_analyzer.get_current_signals(analyzed_data)
             
-            results['sentiment_score'] = agg_sentiment['average_score']
-            results['sentiment_label'] = agg_sentiment['label']
-            results['positive_news'] = agg_sentiment['positive_count']
-            results['negative_news'] = agg_sentiment['negative_count']
-        else:
-            results['sentiment_score'] = 0
-            results['sentiment_label'] = 'neutral'
-            results['positive_news'] = 0
-            results['negative_news'] = 0
-        
-        # 5. Calculate combined score (Technical + Sentiment)
-        technical_score = (results['rsi'] - 50) / 50  # Normalize RSI to -1 to 1
-        sentiment_score = results['sentiment_score']
-        
-        # Weighted combination: 60% technical, 40% sentiment
-        results['combined_score'] = (technical_score * 0.6) + (sentiment_score * 0.4)
-        
-        # 6. Generate recommendation
-        if results['combined_score'] > 0.3:
-            results['recommendation'] = "BULLISH 🚀"
-        elif results['combined_score'] < -0.3:
-            results['recommendation'] = "BEARISH 📉"
-        else:
-            results['recommendation'] = "NEUTRAL ➡️"
-        
-        # 7. Save to database
-        self.database.save_price_data(symbol, analyzed_data)
-        
+            results['price'] = float(price_data['Close'].iloc[-1])
+            
+            # Calculate price change safely
+            if len(price_data) > 1 and 'Daily_Return' in price_data:
+                results['price_change'] = float(price_data['Daily_Return'].iloc[-1] * 100)
+            else:
+                results['price_change'] = 0.0
+            
+            results['rsi'] = float(signals.get('RSI', {}).get('value', 50)) if signals else 50.0
+            results['rsi_signal'] = signals.get('RSI', {}).get('signal', 'NEUTRAL') if signals else 'NEUTRAL'
+            results['volume_unusual'] = signals.get('Volume', {}).get('unusual', False) if signals else False
+            # 3. News collection
+            try:
+                news = self.news_collector.search_company_news(symbol, days_back=7)
+                results['news_count'] = len(news)
+            except Exception as e:
+                print(f"  ⚠️ News collection failed: {e}")
+                results['news_count'] = 0
+                news = []
+            # 4. Sentiment analysis
+            if news and len(news) > 0:
+                try:
+                    sentiments = self.sentiment_analyzer.analyze_news_batch(news)
+                    agg_sentiment = self.sentiment_analyzer.calculate_aggregate_sentiment(sentiments)
+                    
+                    results['sentiment_score'] = float(agg_sentiment.get('average_score', 0))
+                    results['sentiment_label'] = agg_sentiment.get('label', 'neutral')
+                    results['positive_news'] = agg_sentiment.get('positive_count', 0)
+                    results['negative_news'] = agg_sentiment.get('negative_count', 0)
+                except Exception as e:
+                    print(f"  ⚠️ Sentiment analysis failed: {e}")
+                    results['sentiment_score'] = 0.0
+                    results['sentiment_label'] = 'neutral'
+                    results['positive_news'] = 0
+                    results['negative_news'] = 0
+            else:
+                results['sentiment_score'] = 0.0
+                results['sentiment_label'] = 'neutral'
+                results['positive_news'] = 0
+                results['negative_news'] = 0
+                
+            # 5. Calculate combined score
+            technical_score = (results['rsi'] - 50) / 50  # Normalize RSI to -1 to 1
+            sentiment_score = results['sentiment_score']
+            
+            results['combined_score'] = float((technical_score * 0.6) + (sentiment_score * 0.4))
+            
+            # 6. Generate recommendation
+            if results['combined_score'] > 0.3:
+                results['recommendation'] = "BULLISH 🚀"
+            elif results['combined_score'] < -0.3:
+                results['recommendation'] = "BEARISH 📉"
+            else:
+                results['recommendation'] = "NEUTRAL ➡️"
+            # Add data source indicator to recommendation if fallback
+            if not results['has_real_data']:
+                results['recommendation'] += " (SIMULATED DATA)"
+            
+            print(f"  ✅ Analysis complete for {symbol} (Source: {results['data_source']})")
+        except Exception as e:
+            print(f"  ❌ Analysis failed for {symbol}: {str(e)}")
+            # Ensure all required fields are present even on error
+            required_fields = {
+                'price': 0, 'price_change': 0, 'rsi': 50, 'rsi_signal': 'NEUTRAL',
+                'news_count': 0, 'sentiment_score': 0, 'sentiment_label': 'neutral',
+                'positive_news': 0, 'negative_news': 0, 'combined_score': 0,
+                'recommendation': 'ERROR', 'has_real_data': False, 'data_source': 'error'
+            }
+            for field, default in required_fields.items():
+                if field not in results:
+                    results[field] = default
         return results
     
     def analyze_all_stocks(self):
