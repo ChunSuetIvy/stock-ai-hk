@@ -49,16 +49,18 @@ class HKStockDataFetcher:
                 print(f"📦 Using cached data for {symbol}")
                 return cached_data
             # Fetch fresh data
+        
         print(f"🔄 Fetching fresh data for {symbol}")
         try:
             ticker = yf.Ticker(symbol)
             data = ticker.history(period=period)
-            # Cache the result
-            self.cache[cache_key] = (datetime.now(), data)
-            # Add some calculated fields
-            data['Daily_Return'] = data['Close'].pct_change()
-            data['MA_5'] = data['Close'].rolling(window=5).mean()
-            data['Volume_Ratio'] = data['Volume'] / data['Volume'].rolling(window=5).mean()
+            if not data.empty:
+                # Add calculated fields
+                data['Daily_Return'] = data['Close'].pct_change()
+                data['MA_5'] = data['Close'].rolling(window=5).mean()
+                data['Volume_Ratio'] = data['Volume'] / data['Volume'].rolling(window=5).mean()
+            else:
+                print(f"⚠️ Empty data returned for {symbol}")
             return data
         except Exception as e:
             print(f"❌ Error fetching {symbol}: {str(e)}")
