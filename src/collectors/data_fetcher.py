@@ -74,56 +74,84 @@ class HKStockDataFetcher:
         return data
     
     def _fetch_alltick_data(self, symbol, period):
-        """Get real data from Alltick API"""
-        try:
-            if not self.alltick_key:
-                print("   ⚠️ Alltick API key not set")
-                return pd.DataFrame()
-                
-            print(f"   Trying Alltick for {symbol}...")
-            
-            # Alltick API endpoint for historical data
-            url = "https://api.alltick.co/v1/historical"
-            params = {
-                'symbol': symbol,
-                'interval': '1d',
-                'apikey': self.alltick_key,
-                'outputsize': 30
-            }
-            
-            response = requests.get(url, params=params, timeout=15)
-            
-            if response.status_code == 200:
-                data = response.json()
-                
-                if "data" in data and data["data"]:
-                    records = []
-                    for item in data["data"]:
-                        records.append({
-                            'Date': item['datetime'],
-                            'Open': float(item['open']),
-                            'High': float(item['high']),
-                            'Low': float(item['low']),
-                            'Close': float(item['close']),
-                            'Volume': int(float(item['volume'])) if item['volume'] else 1000000
-                        })
-                    
-                    df = pd.DataFrame(records)
-                    df['Date'] = pd.to_datetime(df['Date'])
-                    df = df.set_index('Date')
-                    df = df.sort_index()
-                    
-                    return df
-                else:
-                    print(f"   Alltick: No data for {symbol}")
-                    return pd.DataFrame()
-            else:
-                print(f"   Alltick API error: {response.status_code}")
-                return pd.DataFrame()
-                
-        except Exception as e:
-            print(f"   Alltick failed for {symbol}: {e}")
+        """Try multiple Alltick API endpoints"""
+        if not self.alltick_key:
             return pd.DataFrame()
+        # Try different endpoints
+        endpoints = [
+            "https://api.alltick.co/v1/historical",
+            "https://api.alltick.co/v1/quote",
+            "https://api.alltick.co/v1/eod",
+            ]
+        # Try different symbol formats
+        symbol_formats = [
+            symbol,  # 0700.HK
+            symbol.replace('.HK', ''),  # 0700
+            symbol.replace('.HK', '.HKX'),  # 0700.HKX
+            ]
+        for endpoint in endpoints:
+            for sym_format in symbol_formats:
+                try:
+                    print(f"   Trying {endpoint} with symbol {sym_format}...")
+                    params = {
+                        'symbol': sym_format,
+                        'apikey': self.alltick_key,
+                        }
+                    # Add period-specific params
+                    if 'historical' in endpoint:
+                        params.update({'interval': '1d', 'outputsize': 5})
+                    elif 'eod' in endpoint:
+                        params.update({'limit': 5})
+                    
+                    response = requests.get(endpoint, params=params, timeout=10)
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        print(f"   ✅ {endpoint} returned data")
+                        # Try to parse the data
+                        if "data" in data and data["data"]:
+                            return self._parse_alltick_data(data["data"])
+                        elif "quote" in data:
+                            return self._parse_alltick_quote(data["quote"])
+                        elif "Time Series" in data:
+                            return self._parse_alltick_timeseries(data["Time Series"])
+                        else:
+                            print(f"   ⚠️ Unknown data format from {endpoint}")
+                    else:
+                        print(f"   ❌ {endpoint} HTTP {response.status_code}")
+                except Exception as e:
+                    print(f"   💥 {endpoint} failed: {e}")
+        return pd.DataFrame()
+        
+    def _parse_alltick_data(self, data_list):
+        """Parse Alltick data format"""
+        records = []
+        for item in data_list:
+            records.append({
+                'Date': item.get('datetime', datetime.now().strftime('%Y-%m-%d')),
+                'Open': float(item.get('open', 0)),
+                'High': float(item.get('high', 0)),
+                'Low': float(item.get('low', 0)),
+                'Close': float(item.get('close', 0)),
+                'Volume': int(float(item.get('volume', 1000000)))
+                })
+        df = pd.DataFrame(records)
+        df['Date'] = pd.to_datetime(df['Date'])
+        df = df.set_index('Date')
+        df = df.sort_index()
+        return df
+    def _parse_alltick_quote(self, quote_data):
+        """Parse Alltick quote format"""
+        # Create single data point from quote
+        date = datetime.now()
+        df = pd.DataFrame([{
+            'Open': float(quote_data.get('open', 0)),
+            'High': float(quote_data.get('high', 0)),
+            'Low': float(quote_data.get('low', 0)),
+            'Close': float(quote_data.get('price', 0)),
+            'Volume': int(float(quote_data.get('volume', 1000000)))
+            }], index=[date])
+        return df
     
     def _fetch_twelve_data(self, symbol, period):
         """Get real data from Twelve Data API"""
