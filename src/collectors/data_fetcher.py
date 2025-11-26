@@ -6,10 +6,9 @@ import time
 import json
 import os
 import numpy as np
-import requests
 
 class HKStockDataFetcher:
-    """Hong Kong Stock Data Fetcher - With Alltick API and Fallback Data"""
+    """Hong Kong Stock Data Fetcher - Real data locally, simulated on Railway"""
     
     def __init__(self):
         self.stocks = {
@@ -20,256 +19,101 @@ class HKStockDataFetcher:
             "1299.HK": "AIA Group"
         }
         
-        # Cache to avoid hitting API limits
-        self.cache = {}
-        self.cache_duration = 300
+        # Detect if we're on Railway
+        self.is_railway = os.getenv('RAILWAY_ENVIRONMENT_NAME') is not None
         
-        # API Keys - Updated for Alltick
-        self.alltick_key = os.getenv('ALLTICK_API_KEY', '')
-        self.twelve_data_key = os.getenv('TWELVE_DATA_API_KEY', '')
+        if self.is_railway:
+            print("🚂 Running on Railway - will use fallback data")
+        else:
+            print("💻 Running locally - will use yfinance")
         
     def fetch_stock_data(self, symbol, period="1mo"):
-        """Fetch stock data - tries real APIs first, then fallback"""
-        cache_key = f"{symbol}_{period}"
-        
-        # Check cache first
-        if cache_key in self.cache:
-            cached_time, cached_data = self.cache[cache_key]
-            if (datetime.now() - cached_time).seconds < self.cache_duration:
-                print(f"📦 Using cached data for {symbol}")
-                return cached_data
-        
+        """Fetch stock data - real locally, simulated on Railway"""
         print(f"🔄 Fetching data for {symbol}")
         
-        # Try multiple REAL data sources in order
-        data_sources = [
-            self._fetch_alltick_data,    # Primary - Alltick
-            self._fetch_twelve_data,     # Secondary - Twelve Data
-            self._fetch_yfinance_with_retry,  # Tertiary - yfinance
-        ]
-        
-        data = pd.DataFrame()
-        data_source = "none"
-        
-        for source in data_sources:
-            data = source(symbol, period)
+        # LOCAL: Use yfinance
+        if not self.is_railway:
+            data = self._fetch_yfinance_data(symbol, period)
             if not data.empty:
-                data_source = source.__name__.replace('_fetch_', '')
-                print(f"✅ Got {data_source} data for {symbol}")
-                break
+                print(f"✅ Got real yfinance data for {symbol}")
+                return self._add_technical_indicators(data)
         
-        # If no real data, use fallback data
-        if data.empty:
-            print(f"⚠️ No real data for {symbol}, using fallback data")
-            data = self._generate_fallback_data(symbol)
-            data_source = "fallback"
-        
-        # Add technical indicators
-        data = self._add_technical_indicators(data)
-        data.attrs['data_source'] = data_source
-        
-        # Cache the result
-        self.cache[cache_key] = (datetime.now(), data)
-            
-        return data
+        # RAILWAY: Use fallback data
+        print(f"📊 Using fallback data for {symbol} (Railway environment)")
+        data = self._generate_fallback_data(symbol)
+        return self._add_technical_indicators(data)
     
-    def _fetch_alltick_data(self, symbol, period):
-        """Try multiple Alltick API endpoints"""
-        if not self.alltick_key:
-            return pd.DataFrame()
-        # Try different endpoints
-        endpoints = [
-            "https://api.alltick.co/v1/historical",
-            "https://api.alltick.co/v1/quote",
-            "https://api.alltick.co/v1/eod",
-            ]
-        # Try different symbol formats
-        symbol_formats = [
-            symbol,  # 0700.HK
-            symbol.replace('.HK', ''),  # 0700
-            symbol.replace('.HK', '.HKX'),  # 0700.HKX
-            ]
-        for endpoint in endpoints:
-            for sym_format in symbol_formats:
-                try:
-                    print(f"   Trying {endpoint} with symbol {sym_format}...")
-                    params = {
-                        'symbol': sym_format,
-                        'apikey': self.alltick_key,
-                        }
-                    # Add period-specific params
-                    if 'historical' in endpoint:
-                        params.update({'interval': '1d', 'outputsize': 5})
-                    elif 'eod' in endpoint:
-                        params.update({'limit': 5})
-                    
-                    response = requests.get(endpoint, params=params, timeout=10)
-                    
-                    if response.status_code == 200:
-                        data = response.json()
-                        print(f"   ✅ {endpoint} returned data")
-                        # Try to parse the data
-                        if "data" in data and data["data"]:
-                            return self._parse_alltick_data(data["data"])
-                        elif "quote" in data:
-                            return self._parse_alltick_quote(data["quote"])
-                        elif "Time Series" in data:
-                            return self._parse_alltick_timeseries(data["Time Series"])
-                        else:
-                            print(f"   ⚠️ Unknown data format from {endpoint}")
-                    else:
-                        print(f"   ❌ {endpoint} HTTP {response.status_code}")
-                except Exception as e:
-                    print(f"   💥 {endpoint} failed: {e}")
-        return pd.DataFrame()
-        
-    def _parse_alltick_data(self, data_list):
-        """Parse Alltick data format"""
-        records = []
-        for item in data_list:
-            records.append({
-                'Date': item.get('datetime', datetime.now().strftime('%Y-%m-%d')),
-                'Open': float(item.get('open', 0)),
-                'High': float(item.get('high', 0)),
-                'Low': float(item.get('low', 0)),
-                'Close': float(item.get('close', 0)),
-                'Volume': int(float(item.get('volume', 1000000)))
-                })
-        df = pd.DataFrame(records)
-        df['Date'] = pd.to_datetime(df['Date'])
-        df = df.set_index('Date')
-        df = df.sort_index()
-        return df
-    def _parse_alltick_quote(self, quote_data):
-        """Parse Alltick quote format"""
-        # Create single data point from quote
-        date = datetime.now()
-        df = pd.DataFrame([{
-            'Open': float(quote_data.get('open', 0)),
-            'High': float(quote_data.get('high', 0)),
-            'Low': float(quote_data.get('low', 0)),
-            'Close': float(quote_data.get('price', 0)),
-            'Volume': int(float(quote_data.get('volume', 1000000)))
-            }], index=[date])
-        return df
-    
-    def _fetch_twelve_data(self, symbol, period):
-        """Get real data from Twelve Data API"""
+    def _fetch_yfinance_data(self, symbol, period):
+        """Fetch real data from yfinance (local only)"""
         try:
-            if not self.twelve_data_key:
-                return pd.DataFrame()
-                
-            print(f"   Trying Twelve Data for {symbol}...")
+            ticker = yf.Ticker(symbol)
+            data = ticker.history(period=period)
             
-            # Convert symbol for Twelve Data format
-            twelve_symbol = symbol.replace('.HK', ':HKG')
-            
-            url = "https://api.twelvedata.com/time_series"
-            params = {
-                'symbol': twelve_symbol,
-                'interval': '1day',
-                'outputsize': 30,
-                'apikey': self.twelve_data_key,
-                'format': 'JSON'
-            }
-            
-            response = requests.get(url, params=params, timeout=15)
-            
-            if response.status_code == 200:
-                data = response.json()
-                
-                if "values" in data and data["values"]:
-                    values = data["values"]
-                    
-                    # Convert to DataFrame
-                    records = []
-                    for item in values:
-                        records.append({
-                            'Date': item['datetime'],
-                            'Open': float(item['open']),
-                            'High': float(item['high']),
-                            'Low': float(item['low']),
-                            'Close': float(item['close']),
-                            'Volume': int(float(item['volume'])) if item['volume'] else 1000000
-                        })
-                    
-                    df = pd.DataFrame(records)
-                    df['Date'] = pd.to_datetime(df['Date'])
-                    df = df.set_index('Date')
-                    df = df.sort_index()
-                    
-                    return df
-                else:
-                    print(f"   Twelve Data: No values for {symbol}")
-                    return pd.DataFrame()
+            if not data.empty:
+                print(f"   ✅ yfinance returned {len(data)} days for {symbol}")
+                return data
             else:
-                print(f"   Twelve Data API error: {response.status_code}")
+                print(f"   ⚠️ yfinance returned empty data for {symbol}")
                 return pd.DataFrame()
                 
         except Exception as e:
-            print(f"   Twelve Data failed for {symbol}: {e}")
+            print(f"   ❌ yfinance error for {symbol}: {e}")
             return pd.DataFrame()
     
-    def _fetch_yfinance_with_retry(self, symbol, period):
-        """Try yfinance with multiple attempts"""
-        for attempt in range(2):  # Reduced to 2 attempts for speed
-            try:
-                print(f"   Trying yfinance (attempt {attempt + 1}) for {symbol}...")
-                ticker = yf.Ticker(symbol)
-                data = ticker.history(period=period, timeout=10)
-                
-                if not data.empty:
-                    return data
-                else:
-                    print(f"   yfinance returned empty data for {symbol}")
-                    
-            except Exception as e:
-                print(f"   yfinance attempt {attempt + 1} failed: {e}")
-                
-            time.sleep(1)
-            
-        return pd.DataFrame()
-    
     def _generate_fallback_data(self, symbol):
-        """Generate realistic fallback data when APIs fail"""
-        print(f"   Generating fallback data for {symbol}")
+        """Generate realistic fallback data for Railway"""
         
-        # Create date range for the last 30 days
+        # Use current hour as seed for consistency
+        hour_seed = datetime.now().hour
+        np.random.seed(hour_seed + hash(symbol) % 1000)
+        
+        # Create date range
         end_date = datetime.now()
         start_date = end_date - timedelta(days=30)
         date_range = pd.date_range(start=start_date, end=end_date, freq='D')
         
-        # Realistic base prices for HK stocks
+        # Realistic base prices
         base_prices = {
-            "0700.HK": 320.0,  # Tencent
-            "9988.HK": 85.0,   # Alibaba
-            "0005.HK": 60.0,   # HSBC
-            "0941.HK": 68.0,   # China Mobile
-            "1299.HK": 75.0    # AIA Group
+            "0700.HK": 620.0,  # Tencent
+            "9988.HK": 155.0,  # Alibaba
+            "0005.HK": 107.0,  # HSBC
+            "0941.HK": 87.0,   # China Mobile
+            "1299.HK": 79.0    # AIA Group
         }
         
-        base_price = base_prices.get(symbol, 50.0)
+        base_price = base_prices.get(symbol, 100.0)
+        
+        # Add some trend
+        if symbol == "9988.HK":  # Alibaba trending up
+            trend = 0.002
+        elif symbol == "0005.HK":  # HSBC slightly down
+            trend = -0.001
+        else:
+            trend = 0.0005
+        
+        # Generate prices
+        data = []
         current_price = base_price
         
-        data = []
-        for i, date in enumerate(date_range):
-            # Simulate realistic price movements
-            volatility = 0.02
-            change = np.random.normal(0, volatility)
-            current_price = max(1.0, current_price * (1 + change))  # Prevent negative prices
+        for date in date_range:
+            # Daily movement with trend
+            daily_change = np.random.normal(trend, 0.02)
+            current_price = current_price * (1 + daily_change)
             
+            # OHLC values
             open_price = current_price * (1 + np.random.normal(0, 0.005))
             high = max(open_price, current_price) * (1 + abs(np.random.normal(0, 0.01)))
             low = min(open_price, current_price) * (1 - abs(np.random.normal(0, 0.01)))
-            close_price = current_price
             
-            volume = np.random.randint(1000000, 5000000)
+            # Realistic volume
+            base_volume = 20000000
+            volume = int(base_volume * np.random.uniform(0.5, 2.0))
             
             data.append({
                 'Open': open_price,
                 'High': high,
                 'Low': low,
-                'Close': close_price,
+                'Close': current_price,
                 'Volume': volume
             })
         
@@ -282,25 +126,39 @@ class HKStockDataFetcher:
             return data
             
         try:
+            # Basic indicators
             data['Daily_Return'] = data['Close'].pct_change()
             data['MA_5'] = data['Close'].rolling(window=5).mean()
             data['MA_20'] = data['Close'].rolling(window=20).mean()
             data['Volume_Ratio'] = data['Volume'] / data['Volume'].rolling(window=5).mean()
             
-            # Calculate RSI
+            # RSI calculation
             delta = data['Close'].diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-            rs = gain / loss
+            rs = gain / (loss + 1e-10)  # Avoid division by zero
             data['RSI'] = 100 - (100 / (1 + rs))
             
         except Exception as e:
-            print(f"Error adding technical indicators: {e}")
+            print(f"   Warning: Error adding indicators: {e}")
             
         return data
     
+    def fetch_all_stocks(self):
+        """Fetch data for all stocks"""
+        all_data = {}
+        
+        for symbol, name in self.stocks.items():
+            print(f"Fetching {name}...")
+            data = self.fetch_stock_data(symbol)
+            if not data.empty:
+                all_data[symbol] = data
+                time.sleep(0.5)  # Be nice to APIs
+        
+        return all_data
+    
     def get_summary(self):
-        """Get summary with data source information"""
+        """Get summary of all stocks"""
         summary = []
         
         for symbol, name in self.stocks.items():
@@ -309,64 +167,26 @@ class HKStockDataFetcher:
                 
                 if not data.empty and len(data) > 1:
                     latest = data.iloc[-1]
-                    prev = data.iloc[-2] if len(data) > 1 else latest
-                    
-                    price_change = latest['Close'] - prev['Close']
-                    change_percent = (price_change / prev['Close']) * 100 if prev['Close'] != 0 else 0
+                    prev = data.iloc[-2]
                     
                     summary.append({
                         'Symbol': symbol,
                         'Name': name,
                         'Price': round(float(latest['Close']), 2),
-                        'Change': round(float(price_change), 2),
-                        'Change %': round(float(change_percent), 2),
+                        'Change': round(float(latest['Close'] - prev['Close']), 2),
+                        'Change %': round(((latest['Close'] - prev['Close']) / prev['Close']) * 100, 2),
                         'Volume': int(latest['Volume']),
-                        'Data_Source': data.attrs.get('data_source', 'unknown'),
-                        'RSI': round(float(latest.get('RSI', 50)), 1),
-                        'has_real_data': data.attrs.get('data_source') != 'fallback'
+                        'Data_Source': 'yfinance' if not self.is_railway else 'simulated'
                     })
-                else:
-                    # Fallback entry
-                    summary.append({
-                        'Symbol': symbol,
-                        'Name': name,
-                        'Price': 0,
-                        'Change': 0,
-                        'Change %': 0,
-                        'Volume': 0,
-                        'Data_Source': 'error',
-                        'RSI': 50,
-                        'has_real_data': False
-                    })
-                    
             except Exception as e:
-                print(f"Error in summary for {symbol}: {e}")
-                summary.append({
-                    'Symbol': symbol,
-                    'Name': name,
-                    'Price': 0,
-                    'Change': 0,
-                    'Change %': 0,
-                    'Volume': 0,
-                    'Data_Source': 'error',
-                    'RSI': 50,
-                    'has_real_data': False
-                })
-        
+                print(f"Error getting summary for {symbol}: {e}")
+                
         return pd.DataFrame(summary)
 
-# Test the fetcher
+# Test
 if __name__ == "__main__":
     fetcher = HKStockDataFetcher()
-    
-    print("\n📊 Stock Data Test:")
+    print("\n📊 Stock Summary:")
     print("="*60)
     summary = fetcher.get_summary()
-    
-    if summary.empty:
-        print("❌ NO DATA AVAILABLE")
-    else:
-        print(summary.to_string(index=False))
-        print(f"\n📈 Data Sources:")
-        for _, row in summary.iterrows():
-            print(f"   {row['Symbol']}: {row['Data_Source']} (Real: {row['has_real_data']})")
+    print(summary)

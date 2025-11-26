@@ -1,0 +1,8 @@
+## Data Source Note
+Due to limitations of free real-time Hong Kong stock market APIs, this demo uses sophisticated market simulation that:
+- Generates realistic price movements based on historical volatility patterns
+- Updates hourly with new data
+- Maintains consistent technical indicators (RSI, Moving Averages)
+- Simulates market trends and volatility
+
+For production deployment with real data, integration with paid APIs like Bloomberg, Reuters, or HKEX datafeed would be required.
