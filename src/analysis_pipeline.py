@@ -7,6 +7,7 @@ from collectors.data_fetcher import HKStockDataFetcher
 from collectors.news_collector import NewsCollector
 from analyzers.sentiment_analyzer import SentimentAnalyzer
 from analyzers.indicators import TechnicalIndicators
+from analyzers.analysis_orchestrator import AnalysisOrchestrator  # NEW
 from database import StockDatabase
 import pandas as pd
 from datetime import datetime
@@ -19,6 +20,7 @@ class StockAnalysisPipeline:
         self.news_collector = NewsCollector()
         self.sentiment_analyzer = SentimentAnalyzer()
         self.technical_analyzer = TechnicalIndicators()
+        self.analysis_orchestrator = AnalysisOrchestrator()  # NEW
         self.database = StockDatabase()
         
         self.analysis_results = {}
@@ -26,56 +28,28 @@ class StockAnalysisPipeline:
     def analyze_single_stock(self, symbol):
         """Complete analysis for one stock with robust error handling"""
         print(f"\n🔍 Analyzing {symbol}...")
+        
+        # Initialize results with basic structure
         results = {
             'symbol': symbol,
             'name': self.fetcher.stocks.get(symbol, symbol),
             'timestamp': datetime.now().isoformat(),
             'has_real_data': False,
             'data_source': 'unknown'
-            }
+        }
+        
         try:
             # 1. Fetch price data
             price_data = self.fetcher.fetch_stock_data(symbol, period="1mo")
             if price_data.empty:
                 print(f"  ⚠️ No price data available")
-                # Set default values to prevent crashes
-                results.update({
-                    'price': 0,
-                    'price_change': 0,
-                    'rsi': 50,
-                    'rsi_signal': 'NEUTRAL',
-                    'volume_unusual': False,
-                    'news_count': 0,
-                    'sentiment_score': 0,
-                    'sentiment_label': 'neutral',
-                    'positive_news': 0,
-                    'negative_news': 0,
-                    'combined_score': 0,
-                    'recommendation': 'NO DATA',
-                    'has_real_data': False,
-                    'data_source': 'none'
-                })
-                return results
+                return self._create_default_results(results)
+            
             # Track data source
             results['data_source'] = price_data.attrs.get('data_source', 'unknown')
             results['has_real_data'] = price_data.attrs.get('data_source') != 'fallback'
             
-            # 2. Technical analysis
-            analyzed_data = self.technical_analyzer.analyze_stock(price_data)
-            signals = self.technical_analyzer.get_current_signals(analyzed_data)
-            
-            results['price'] = float(price_data['Close'].iloc[-1])
-            
-            # Calculate price change safely
-            if len(price_data) > 1 and 'Daily_Return' in price_data:
-                results['price_change'] = float(price_data['Daily_Return'].iloc[-1] * 100)
-            else:
-                results['price_change'] = 0.0
-            
-            results['rsi'] = float(signals.get('RSI', {}).get('value', 50)) if signals else 50.0
-            results['rsi_signal'] = signals.get('RSI', {}).get('signal', 'NEUTRAL') if signals else 'NEUTRAL'
-            results['volume_unusual'] = signals.get('Volume', {}).get('unusual', False) if signals else False
-            # 3. News collection
+            # 2. Fetch news data
             try:
                 news = self.news_collector.search_company_news(symbol, days_back=7)
                 results['news_count'] = len(news)
@@ -83,64 +57,162 @@ class StockAnalysisPipeline:
                 print(f"  ⚠️ News collection failed: {e}")
                 results['news_count'] = 0
                 news = []
-            # 4. Sentiment analysis
-            if news and len(news) > 0:
-                try:
-                    sentiments = self.sentiment_analyzer.analyze_news_batch(news)
-                    agg_sentiment = self.sentiment_analyzer.calculate_aggregate_sentiment(sentiments)
-                    
-                    results['sentiment_score'] = float(agg_sentiment.get('average_score', 0))
-                    results['sentiment_label'] = agg_sentiment.get('label', 'neutral')
-                    results['positive_news'] = agg_sentiment.get('positive_count', 0)
-                    results['negative_news'] = agg_sentiment.get('negative_count', 0)
-                except Exception as e:
-                    print(f"  ⚠️ Sentiment analysis failed: {e}")
-                    results['sentiment_score'] = 0.0
-                    results['sentiment_label'] = 'neutral'
-                    results['positive_news'] = 0
-                    results['negative_news'] = 0
-            else:
-                results['sentiment_score'] = 0.0
-                results['sentiment_label'] = 'neutral'
-                results['positive_news'] = 0
-                results['negative_news'] = 0
-                
-            # 5. Calculate combined score
-            technical_score = (results['rsi'] - 50) / 50  # Normalize RSI to -1 to 1
-            sentiment_score = results['sentiment_score']
             
-            results['combined_score'] = float((technical_score * 0.6) + (sentiment_score * 0.4))
+            # 3. USE NEW ANALYSIS ORCHESTRATOR FOR COMPREHENSIVE ANALYSIS
+            analysis_result = self.analysis_orchestrator.analyze_stock(symbol, price_data, news)
             
-            # 6. Generate recommendation
-            if results['combined_score'] > 0.3:
-                results['recommendation'] = "BULLISH 🚀"
-            elif results['combined_score'] < -0.3:
-                results['recommendation'] = "BEARISH 📉"
-            else:
-                results['recommendation'] = "NEUTRAL ➡️"
-            # Add data source indicator to recommendation if fallback
-            if not results['has_real_data']:
-                results['recommendation'] += " (SIMULATED DATA)"
+            # 4. MAP NEW ANALYSIS RESULTS TO EXISTING FRONTEND STRUCTURE
+            results.update(self._map_analysis_to_frontend_format(analysis_result, price_data))
             
             print(f"  ✅ Analysis complete for {symbol} (Source: {results['data_source']})")
+            
         except Exception as e:
             print(f"  ❌ Analysis failed for {symbol}: {str(e)}")
-            # Ensure all required fields are present even on error
-            required_fields = {
-                'price': 0, 'price_change': 0, 'rsi': 50, 'rsi_signal': 'NEUTRAL',
-                'news_count': 0, 'sentiment_score': 0, 'sentiment_label': 'neutral',
-                'positive_news': 0, 'negative_news': 0, 'combined_score': 0,
-                'recommendation': 'ERROR', 'has_real_data': False, 'data_source': 'error'
-            }
-            for field, default in required_fields.items():
-                if field not in results:
-                    results[field] = default
+            results.update(self._create_error_results())
+            
         return results
+    
+    def _map_analysis_to_frontend_format(self, analysis_result, price_data):
+        """Map the new analysis format to the existing frontend expected format"""
+        try:
+            technical = analysis_result.get('technical_analysis', {})
+            sentiment = analysis_result.get('sentiment_analysis', {})
+            risk = analysis_result.get('risk_analysis', {})
+            
+            # Calculate price change (daily)
+            price_change = 0.0
+            if len(price_data) > 1:
+                current_price = price_data['Close'].iloc[-1]
+                prev_price = price_data['Close'].iloc[-2]
+                price_change = ((current_price - prev_price) / prev_price) * 100
+            
+            # Map to existing frontend structure
+            mapped_results = {
+                'price': analysis_result.get('current_price', 0),
+                'price_change': round(price_change, 2),
+                'rsi': technical.get('rsi', 50),
+                'rsi_signal': technical.get('rsi_signal', 'NEUTRAL'),
+                'volume_unusual': technical.get('volume', {}).get('unusual', False),
+                'news_count': sentiment.get('news_count', 0),
+                'sentiment_score': sentiment.get('sentiment_score', 0),
+                'sentiment_label': sentiment.get('signal', 'neutral').lower(),
+                'positive_news': sentiment.get('positive_count', 0),
+                'negative_news': sentiment.get('negative_count', 0),
+                
+                # NEW FIELDS FOR ENHANCED ANALYSIS
+                'technical_score': technical.get('technical_score', 50),
+                'technical_signal': technical.get('signal', 'NEUTRAL'),
+                'risk_score': risk.get('risk_score', 50),
+                'risk_level': risk.get('risk_level', 'MODERATE'),
+                'technical_insights': analysis_result.get('technical_insights', []),
+                'sentiment_insights': analysis_result.get('sentiment_insights', []),
+                'ai_recommendation': analysis_result.get('overall_recommendation', 'Analysis unavailable'),
+                'confidence_score': analysis_result.get('confidence_score', 0),
+                
+                # Backward compatibility - calculate combined_score for existing frontend
+                'combined_score': self._calculate_legacy_combined_score(technical, sentiment)
+            }
+            
+            # Generate legacy recommendation for existing frontend
+            mapped_results['recommendation'] = self._generate_legacy_recommendation(
+                mapped_results['combined_score'], 
+                mapped_results['has_real_data']
+            )
+            
+            return mapped_results
+            
+        except Exception as e:
+            print(f"  ⚠️ Error mapping analysis results: {e}")
+            return self._create_error_results()
+    
+    def _calculate_legacy_combined_score(self, technical, sentiment):
+        """Calculate the legacy combined score for backward compatibility"""
+        try:
+            # Normalize technical score (0-100) to -1 to 1
+            tech_score_normalized = (technical.get('technical_score', 50) - 50) / 50
+            sentiment_score = sentiment.get('sentiment_score', 0)
+            
+            # Same weighting as before
+            combined_score = (tech_score_normalized * 0.6) + (sentiment_score * 0.4)
+            return float(combined_score)
+        except:
+            return 0.0
+    
+    def _generate_legacy_recommendation(self, combined_score, has_real_data):
+        """Generate legacy recommendation format for existing frontend"""
+        if combined_score > 0.3:
+            recommendation = "BULLISH 🚀"
+        elif combined_score < -0.3:
+            recommendation = "BEARISH 📉"
+        else:
+            recommendation = "NEUTRAL ➡️"
+            
+        # Add data source indicator if fallback
+        if not has_real_data:
+            recommendation += " (SIMULATED DATA)"
+            
+        return recommendation
+    
+    def _create_default_results(self, base_results):
+        """Create default results when no data is available"""
+        default_results = {
+            'price': 0,
+            'price_change': 0,
+            'rsi': 50,
+            'rsi_signal': 'NEUTRAL',
+            'volume_unusual': False,
+            'news_count': 0,
+            'sentiment_score': 0,
+            'sentiment_label': 'neutral',
+            'positive_news': 0,
+            'negative_news': 0,
+            'combined_score': 0,
+            'technical_score': 50,
+            'technical_signal': 'NEUTRAL',
+            'risk_score': 50,
+            'risk_level': 'MODERATE',
+            'technical_insights': ['No technical data available'],
+            'sentiment_insights': ['No sentiment data available'],
+            'ai_recommendation': 'No data available for analysis',
+            'confidence_score': 0,
+            'recommendation': 'NO DATA',
+            'has_real_data': False,
+            'data_source': 'none'
+        }
+        base_results.update(default_results)
+        return base_results
+    
+    def _create_error_results(self):
+        """Create error results when analysis fails"""
+        return {
+            'price': 0,
+            'price_change': 0,
+            'rsi': 50,
+            'rsi_signal': 'NEUTRAL',
+            'volume_unusual': False,
+            'news_count': 0,
+            'sentiment_score': 0,
+            'sentiment_label': 'neutral',
+            'positive_news': 0,
+            'negative_news': 0,
+            'combined_score': 0,
+            'technical_score': 50,
+            'technical_signal': 'NEUTRAL',
+            'risk_score': 50,
+            'risk_level': 'MODERATE',
+            'technical_insights': ['Technical analysis temporarily unavailable'],
+            'sentiment_insights': ['Sentiment analysis temporarily unavailable'],
+            'ai_recommendation': 'Analysis error occurred',
+            'confidence_score': 0,
+            'recommendation': 'ERROR',
+            'has_real_data': False,
+            'data_source': 'error'
+        }
     
     def analyze_all_stocks(self):
         """Analyze all tracked stocks"""
         print("="*60)
-        print(" "*15 + "🤖 COMPREHENSIVE STOCK ANALYSIS")
+        print(" "*15 + "🤖 ENHANCED AI STOCK ANALYSIS")
         print("="*60)
         print(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         
@@ -156,22 +228,22 @@ class StockAnalysisPipeline:
         return all_results
     
     def generate_report(self):
-        """Generate analysis report"""
+        """Generate enhanced analysis report"""
         if not self.analysis_results:
             print("No analysis results available")
             return
         
         print("\n" + "="*60)
-        print(" "*20 + "📊 ANALYSIS REPORT")
+        print(" "*20 + "📊 ENHANCED AI ANALYSIS REPORT")
         print("="*60)
         
         # Convert to DataFrame for easy analysis
         df = pd.DataFrame(self.analysis_results.values())
         
-        # Sort by combined score
-        df_sorted = df.sort_values('combined_score', ascending=False)
+        # Sort by technical score (new primary metric)
+        df_sorted = df.sort_values('technical_score', ascending=False)
         
-        print("\n🏆 STOCK RANKINGS (by Combined Score)")
+        print("\n🏆 STOCK RANKINGS (by Technical Score)")
         print("-"*50)
         
         for idx, row in df_sorted.iterrows():
@@ -179,47 +251,76 @@ class StockAnalysisPipeline:
             
             print(f"{emoji} {row['name']} ({row['symbol']})")
             print(f"   Price: ${row['price']:.2f} ({row['price_change']:+.2f}%)")
-            print(f"   Technical: RSI {row['rsi']:.1f} ({row['rsi_signal']})")
+            print(f"   Technical Score: {row['technical_score']:.1f}/100 ({row['technical_signal']})")
+            print(f"   RSI: {row['rsi']:.1f} | Risk: {row['risk_level']} ({row['risk_score']:.1f})")
             print(f"   Sentiment: {row['sentiment_label']} ({row['sentiment_score']:+.3f})")
             print(f"   News: {row['positive_news']}↑ {row['negative_news']}↓ from {row['news_count']} articles")
-            print(f"   📍 {row['recommendation']}")
+            print(f"   🤖 AI Recommendation: {row['ai_recommendation']}")
+            
+            # Show top insight if available
+            if row.get('technical_insights') and len(row['technical_insights']) > 0:
+                print(f"   💡 {row['technical_insights'][0]}")
             print()
         
-        # Market Overview
-        print("\n📈 MARKET OVERVIEW")
+        # Enhanced Market Overview
+        print("\n📈 ENHANCED MARKET OVERVIEW")
         print("-"*50)
         
-        bullish = len(df[df['recommendation'].str.contains('BULLISH')])
-        bearish = len(df[df['recommendation'].str.contains('BEARISH')])
-        neutral = len(df[df['recommendation'].str.contains('NEUTRAL')])
+        bullish = len(df[df['technical_signal'].str.contains('BULLISH')])
+        bearish = len(df[df['technical_signal'].str.contains('BEARISH')])
+        neutral = len(df[df['technical_signal'].str.contains('NEUTRAL')])
         
         print(f"Bullish Stocks: {bullish}")
-        print(f"Bearish Stocks: {bearish}")
+        print(f"Bearish Stocks: {bearish}") 
         print(f"Neutral Stocks: {neutral}")
         
-        avg_sentiment = df['sentiment_score'].mean()
-        if avg_sentiment > 0.1:
-            market_mood = "😊 Positive"
-        elif avg_sentiment < -0.1:
-            market_mood = "😟 Negative"
-        else:
-            market_mood = "😐 Neutral"
+        # Risk distribution
+        low_risk = len(df[df['risk_level'] == 'LOW'])
+        mod_risk = len(df[df['risk_level'] == 'MODERATE'])
+        high_risk = len(df[df['risk_level'] == 'HIGH'])
         
-        print(f"\nOverall Market Sentiment: {market_mood} ({avg_sentiment:+.3f})")
+        print(f"\nRisk Distribution:")
+        print(f"  Low Risk: {low_risk} stocks")
+        print(f"  Moderate Risk: {mod_risk} stocks")
+        print(f"  High Risk: {high_risk} stocks")
+        
+        avg_technical = df['technical_score'].mean()
+        avg_sentiment = df['sentiment_score'].mean()
+        avg_risk = df['risk_score'].mean()
+        
+        print(f"\nAverage Scores:")
+        print(f"  Technical: {avg_technical:.1f}/100")
+        print(f"  Sentiment: {avg_sentiment:+.3f}")
+        print(f"  Risk: {avg_risk:.1f}/100")
+        
+        # Overall market sentiment
+        if avg_sentiment > 0.1 and avg_technical > 60:
+            market_mood = "😊 STRONGLY POSITIVE"
+        elif avg_sentiment > 0.1 or avg_technical > 60:
+            market_mood = "😊 POSITIVE"
+        elif avg_sentiment < -0.1 and avg_technical < 40:
+            market_mood = "😟 STRONGLY NEGATIVE"
+        elif avg_sentiment < -0.1 or avg_technical < 40:
+            market_mood = "😟 NEGATIVE"
+        else:
+            market_mood = "😐 NEUTRAL"
+        
+        print(f"\nOverall Market Mood: {market_mood}")
         
         return df
 
-# Run the complete pipeline
+# Run the enhanced pipeline
 if __name__ == "__main__":
     pipeline = StockAnalysisPipeline()
     
-    # Analyze all stocks
+    # Analyze all stocks with new AI engine
     results = pipeline.analyze_all_stocks()
     
-    # Generate report
+    # Generate enhanced report
     report_df = pipeline.generate_report()
     
     # Save report
     if report_df is not None:
+        os.makedirs('data/processed', exist_ok=True)
         report_df.to_csv('data/processed/analysis_report.csv', index=False)
-        print("\n💾 Report saved to: data/processed/analysis_report.csv")
+        print("\n💾 Enhanced report saved to: data/processed/analysis_report.csv")

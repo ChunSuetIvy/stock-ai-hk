@@ -14,7 +14,7 @@
             padding: 20px;
         }
         .container {
-            max-width: 1200px;
+            max-width: 1400px;
             margin: 0 auto;
         }
         h1 {
@@ -60,7 +60,7 @@
         }
         .stocks-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
             gap: 20px;
         }
         .stock-card {
@@ -113,25 +113,65 @@
             font-weight: bold;
             margin-top: 5px;
         }
+        .ai-insights {
+            margin-top: 15px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 10px;
+            border-left: 4px solid #667eea;
+        }
+        .ai-insights h4 {
+            color: #667eea;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .insight-list {
+            list-style: none;
+        }
+        .insight-list li {
+            padding: 5px 0;
+            font-size: 0.9em;
+            border-bottom: 1px solid #e9ecef;
+        }
+        .insight-list li:last-child {
+            border-bottom: none;
+        }
         .recommendation {
             margin-top: 15px;
-            padding: 10px;
+            padding: 12px;
             border-radius: 8px;
             text-align: center;
             font-weight: bold;
+            font-size: 1.1em;
         }
         .bullish {
-            background: #d4edda;
+            background: linear-gradient(135deg, #d4edda, #c3e6cb);
             color: #155724;
+            border: 2px solid #c3e6cb;
         }
         .bearish {
-            background: #f8d7da;
+            background: linear-gradient(135deg, #f8d7da, #f5c6cb);
             color: #721c24;
+            border: 2px solid #f5c6cb;
         }
         .neutral-rec {
-            background: #e2e3e5;
+            background: linear-gradient(135deg, #e2e3e5, #d6d8db);
             color: #383d41;
+            border: 2px solid #d6d8db;
         }
+        .risk-indicator {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 0.8em;
+            font-weight: bold;
+            margin-left: 8px;
+        }
+        .risk-low { background: #d4edda; color: #155724; }
+        .risk-moderate { background: #fff3cd; color: #856404; }
+        .risk-high { background: #f8d7da; color: #721c24; }
         .loading {
             text-align: center;
             color: white;
@@ -147,9 +187,11 @@
             font-weight: bold;
             cursor: pointer;
             margin-bottom: 20px;
+            transition: all 0.3s ease;
         }
         .refresh-btn:hover {
             background: #f0f0f0;
+            transform: scale(1.05);
         }
         .error-card {
             background: #f8d7da;
@@ -169,6 +211,7 @@
             border-radius: 15px;
             font-size: 0.8em;
             font-weight: bold;
+            z-index: 1000;
         }
         .env-badge.local {
             background: #28a745;
@@ -176,6 +219,17 @@
         .env-badge.railway {
             background: #6f42c1;
         }
+        .score-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 0.8em;
+            font-weight: bold;
+            margin-left: 5px;
+        }
+        .score-high { background: #d4edda; color: #155724; }
+        .score-medium { background: #fff3cd; color: #856404; }
+        .score-low { background: #f8d7da; color: #721c24; }
     </style>
 </head>
 <body>
@@ -419,6 +473,14 @@
                 const recClass = stock.recommendation && stock.recommendation.includes('BULLISH') ? 'bullish' : 
                                stock.recommendation && stock.recommendation.includes('BEARISH') ? 'bearish' : 'neutral-rec';
                 
+                // Risk level styling
+                const riskClass = stock.risk_level === 'LOW' ? 'risk-low' : 
+                                stock.risk_level === 'MODERATE' ? 'risk-moderate' : 'risk-high';
+                
+                // Technical score styling
+                const techScoreClass = stock.technical_score > 70 ? 'score-high' : 
+                                     stock.technical_score > 40 ? 'score-medium' : 'score-low';
+                
                 stocksHTML += `
                     <div class="stock-card">
                         <div class="stock-header">
@@ -431,15 +493,29 @@
                             </div>
                         </div>
                         
-                        <div class="${changeClass}" style="text-align: center; font-size: 1.2em;">
+                        <div class="${changeClass}" style="text-align: center; font-size: 1.2em; margin-bottom: 10px;">
                             ${stock.price_change > 0 ? '▲' : stock.price_change < 0 ? '▼' : '─'} 
                             ${stock.price_change ? Math.abs(stock.price_change).toFixed(2) + '%' : 'N/A'}
                         </div>
                         
                         <div class="stock-metrics">
                             <div class="metric">
+                                <div class="metric-label">Technical Score</div>
+                                <div class="metric-value">
+                                    ${stock.technical_score ? stock.technical_score.toFixed(1) : 'N/A'}
+                                    <span class="score-badge ${techScoreClass}">${stock.technical_signal || 'N/A'}</span>
+                                </div>
+                            </div>
+                            <div class="metric">
                                 <div class="metric-label">RSI</div>
                                 <div class="metric-value">${stock.rsi ? stock.rsi.toFixed(1) : 'N/A'}</div>
+                            </div>
+                            <div class="metric">
+                                <div class="metric-label">Risk Level</div>
+                                <div class="metric-value">
+                                    ${stock.risk_level || 'N/A'}
+                                    <span class="risk-indicator ${riskClass}">${stock.risk_score ? stock.risk_score.toFixed(1) : 'N/A'}</span>
+                                </div>
                             </div>
                             <div class="metric">
                                 <div class="metric-label">Sentiment</div>
@@ -450,13 +526,26 @@
                                 <div class="metric-value">${stock.news_count || 0} articles</div>
                             </div>
                             <div class="metric">
-                                <div class="metric-label">Score</div>
-                                <div class="metric-value">${stock.combined_score ? stock.combined_score.toFixed(3) : 'N/A'}</div>
+                                <div class="metric-label">Confidence</div>
+                                <div class="metric-value">${stock.confidence_score ? (stock.confidence_score * 100).toFixed(0) + '%' : 'N/A'}</div>
                             </div>
                         </div>
                         
+                        <!-- AI Insights Section -->
+                        ${(stock.technical_insights && stock.technical_insights.length > 0) || (stock.sentiment_insights && stock.sentiment_insights.length > 0) ? `
+                        <div class="ai-insights">
+                            <h4>🤖 AI Analysis</h4>
+                            <ul class="insight-list">
+                                ${stock.technical_insights && stock.technical_insights.length > 0 ? 
+                                    stock.technical_insights.slice(0, 2).map(insight => `<li>${insight}</li>`).join('') : ''}
+                                ${stock.sentiment_insights && stock.sentiment_insights.length > 0 ? 
+                                    stock.sentiment_insights.slice(0, 1).map(insight => `<li>${insight}</li>`).join('') : ''}
+                            </ul>
+                        </div>
+                        ` : ''}
+                        
                         <div class="recommendation ${recClass}">
-                            ${stock.recommendation || 'NO DATA'}
+                            ${stock.ai_recommendation || stock.recommendation || 'NO DATA'}
                         </div>
                         ${stock.error ? `<div style="color: #dc3545; font-size: 0.8em; margin-top: 10px;">⚠️ ${stock.error}</div>` : ''}
                     </div>
