@@ -9,7 +9,7 @@ import numpy as np
 import requests
 
 class HKStockDataFetcher:
-    """Hong Kong Stock Data Fetcher with Real Data Sources"""
+    """Hong Kong Stock Data Fetcher - Real Data Only"""
     
     def __init__(self):
         self.stocks = {
@@ -24,11 +24,12 @@ class HKStockDataFetcher:
         self.cache = {}
         self.cache_duration = 300
         
-        # Alpha Vantage API Key (FREE - get from https://www.alphavantage.co/support/#api-key)
-        self.alpha_vantage_key = os.getenv('ALPHA_VANTAGE_API_KEY', 'demo')
+        # API Keys - GET THESE FREE KEYS
+        self.twelve_data_key = os.getenv('TWELVE_DATA_API_KEY', '')
+        self.alpha_vantage_key = os.getenv('ALPHA_VANTAGE_API_KEY', '')
         
     def fetch_stock_data(self, symbol, period="1mo"):
-        """Fetch stock data - tries multiple real data sources"""
+        """Fetch REAL stock data only - no simulation"""
         cache_key = f"{symbol}_{period}"
         
         # Check cache first
@@ -38,56 +39,112 @@ class HKStockDataFetcher:
                 print(f"📦 Using cached data for {symbol}")
                 return cached_data
         
-        print(f"🔄 Fetching data for {symbol}")
+        print(f"🔄 Fetching REAL data for {symbol}")
         
-        # Try multiple real data sources in order
+        # Try multiple REAL data sources
         data_sources = [
+            self._fetch_twelve_data,  # Best for international stocks
             self._fetch_alpha_vantage,
-            self._fetch_yfinance,
-            self._generate_simulated_data  # Last resort
+            self._fetch_yfinance_with_retry,
         ]
         
-        for data_source in data_sources:
-            data = data_source(symbol, period)
+        data = pd.DataFrame()
+        data_source = "none"
+        
+        for source in data_sources:
+            data = source(symbol, period)
             if not data.empty:
-                data_source_name = data_source.__name__.replace('_fetch_', '').replace('_generate_', '')
-                print(f"✅ Got {data_source_name} data for {symbol}")
+                data_source = source.__name__.replace('_fetch_', '')
+                print(f"✅ Got {data_source} data for {symbol}")
                 break
-        else:
-            print(f"❌ All data sources failed for {symbol}")
+        
+        if data.empty:
+            print(f"❌ NO REAL DATA AVAILABLE for {symbol}")
+            # Return empty DataFrame instead of fake data
             return pd.DataFrame()
         
-        if not data.empty:
-            # Add technical indicators
-            data = self._add_technical_indicators(data)
-            # Add data source info
-            data.attrs['data_source'] = data_source_name
-            # Cache the result
-            self.cache[cache_key] = (datetime.now(), data)
+        # Add technical indicators
+        data = self._add_technical_indicators(data)
+        data.attrs['data_source'] = data_source
+        
+        # Cache the result
+        self.cache[cache_key] = (datetime.now(), data)
             
         return data
     
-    def _fetch_alpha_vantage(self, symbol, period):
-        """Get real data from Alpha Vantage API"""
+    def _fetch_twelve_data(self, symbol, period):
+        """Get real data from Twelve Data API (BEST for HK stocks)"""
         try:
-            if self.alpha_vantage_key == 'demo':
-                return pd.DataFrame()  # Skip if using demo key
+            if not self.twelve_data_key:
+                return pd.DataFrame()
+                
+            print(f"   Trying Twelve Data for {symbol}...")
+            
+            # Twelve Data API endpoint
+            url = "https://api.twelvedata.com/time_series"
+            params = {
+                'symbol': symbol,
+                'interval': '1day',
+                'outputsize': 30,  # Last 30 days
+                'apikey': self.twelve_data_key,
+                'format': 'JSON'
+            }
+            
+            response = requests.get(url, params=params, timeout=15)
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                if "values" in data:
+                    values = data["values"]
+                    
+                    # Convert to DataFrame
+                    records = []
+                    for item in values:
+                        records.append({
+                            'Date': item['datetime'],
+                            'Open': float(item['open']),
+                            'High': float(item['high']),
+                            'Low': float(item['low']),
+                            'Close': float(item['close']),
+                            'Volume': int(float(item['volume']))
+                        })
+                    
+                    df = pd.DataFrame(records)
+                    df['Date'] = pd.to_datetime(df['Date'])
+                    df = df.set_index('Date')
+                    df = df.sort_index()
+                    
+                    return df
+                else:
+                    print(f"   Twelve Data: No values for {symbol}")
+                    return pd.DataFrame()
+            else:
+                print(f"   Twelve Data API error: {response.status_code}")
+                return pd.DataFrame()
+                
+        except Exception as e:
+            print(f"   Twelve Data failed for {symbol}: {e}")
+            return pd.DataFrame()
+    
+    def _fetch_alpha_vantage(self, symbol, period):
+        """Get real data from Alpha Vantage"""
+        try:
+            if not self.alpha_vantage_key:
+                return pd.DataFrame()
                 
             print(f"   Trying Alpha Vantage for {symbol}...")
             
-            # Convert symbol for Alpha Vantage (remove .HK)
-            av_symbol = symbol.replace('.HK', '')
-            
             # Alpha Vantage API endpoint
-            url = f"https://www.alphavantage.co/query"
+            url = "https://www.alphavantage.co/query"
             params = {
                 'function': 'TIME_SERIES_DAILY',
-                'symbol': av_symbol,
+                'symbol': symbol,
                 'apikey': self.alpha_vantage_key,
                 'outputsize': 'compact'
             }
             
-            response = requests.get(url, params=params, timeout=10)
+            response = requests.get(url, params=params, timeout=15)
             
             if response.status_code == 200:
                 data = response.json()
@@ -112,9 +169,13 @@ class HKStockDataFetcher:
                     df = df.set_index('Date')
                     df = df.sort_index()
                     
+                    # Get only last 30 days
+                    if len(df) > 30:
+                        df = df.tail(30)
+                    
                     return df
                 else:
-                    print(f"   Alpha Vantage: No time series data for {symbol}")
+                    print(f"   Alpha Vantage: No time series for {symbol}")
                     return pd.DataFrame()
             else:
                 print(f"   Alpha Vantage API error: {response.status_code}")
@@ -124,65 +185,28 @@ class HKStockDataFetcher:
             print(f"   Alpha Vantage failed for {symbol}: {e}")
             return pd.DataFrame()
     
-    def _fetch_yfinance(self, symbol, period):
-        """Try yfinance as fallback"""
-        try:
-            print(f"   Trying yfinance for {symbol}...")
-            ticker = yf.Ticker(symbol)
-            data = ticker.history(period=period, timeout=10)
-            return data
-        except Exception as e:
-            print(f"   yfinance failed for {symbol}: {e}")
-            return pd.DataFrame()
-    
-    def _generate_simulated_data(self, symbol, period):
-        """Generate simulated data as last resort"""
-        print(f"   Generating simulated data for {symbol}")
-        
-        # Create date range for the last 30 days
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=30)
-        date_range = pd.date_range(start=start_date, end=end_date, freq='D')
-        
-        # Realistic base prices
-        base_prices = {
-            "0700.HK": 320.0,  # Tencent
-            "9988.HK": 85.0,   # Alibaba
-            "0005.HK": 60.0,   # HSBC
-            "0941.HK": 68.0,   # China Mobile
-            "1299.HK": 75.0    # AIA
-        }
-        
-        base_price = base_prices.get(symbol, 50.0)
-        current_price = base_price
-        
-        data = []
-        for date in date_range:
-            # Realistic price movements
-            volatility = 0.02
-            change = np.random.normal(0, volatility)
-            current_price = current_price * (1 + change)
+    def _fetch_yfinance_with_retry(self, symbol, period):
+        """Try yfinance with multiple attempts"""
+        for attempt in range(3):
+            try:
+                print(f"   Trying yfinance (attempt {attempt + 1}) for {symbol}...")
+                ticker = yf.Ticker(symbol)
+                data = ticker.history(period=period, timeout=15)
+                
+                if not data.empty:
+                    return data
+                else:
+                    print(f"   yfinance returned empty data for {symbol}")
+                    
+            except Exception as e:
+                print(f"   yfinance attempt {attempt + 1} failed: {e}")
+                
+            time.sleep(1)  # Wait before retry
             
-            open_price = current_price * (1 + np.random.normal(0, 0.005))
-            high = max(open_price, current_price) * (1 + abs(np.random.normal(0, 0.01)))
-            low = min(open_price, current_price) * (1 - abs(np.random.normal(0, 0.01)))
-            close_price = current_price
-            
-            volume = np.random.randint(1000000, 5000000)
-            
-            data.append({
-                'Open': open_price,
-                'High': high,
-                'Low': low,
-                'Close': close_price,
-                'Volume': volume
-            })
-        
-        df = pd.DataFrame(data, index=date_range)
-        return df
+        return pd.DataFrame()
     
     def _add_technical_indicators(self, data):
-        """Add technical indicators"""
+        """Add technical indicators to real data"""
         if data.empty:
             return data
             
@@ -205,7 +229,7 @@ class HKStockDataFetcher:
         return data
     
     def get_summary(self):
-        """Get summary with data source information"""
+        """Get summary - returns empty if no real data"""
         summary = []
         
         for symbol, name in self.stocks.items():
@@ -227,39 +251,35 @@ class HKStockDataFetcher:
                         'Change %': round(float(change_percent), 2),
                         'Volume': int(latest['Volume']),
                         'Data_Source': data.attrs.get('data_source', 'unknown'),
-                        'RSI': round(float(latest.get('RSI', 50)), 1)
+                        'RSI': round(float(latest.get('RSI', 0)), 1),
+                        'has_real_data': True
                     })
                 else:
-                    summary.append({
-                        'Symbol': symbol,
-                        'Name': name,
-                        'Price': 0,
-                        'Change': 0,
-                        'Change %': 0,
-                        'Volume': 0,
-                        'Data_Source': 'error',
-                        'RSI': 50
-                    })
+                    # NO DATA - don't include in summary
+                    print(f"❌ No real data for {symbol}, skipping...")
+                    continue
                     
             except Exception as e:
                 print(f"Error in summary for {symbol}: {e}")
-                summary.append({
-                    'Symbol': symbol,
-                    'Name': name,
-                    'Price': 0,
-                    'Change': 0,
-                    'Change %': 0,
-                    'Volume': 0,
-                    'Data_Source': 'error',
-                    'RSI': 50
-                })
+                continue
         
+        if not summary:
+            print("⚠️ NO REAL DATA AVAILABLE FOR ANY STOCK")
+            
         return pd.DataFrame(summary)
 
+# Test with real data only
 if __name__ == "__main__":
     fetcher = HKStockDataFetcher()
     
-    print("\n📊 Stock Summary:")
+    print("\n📊 REAL Stock Data Test:")
     print("="*60)
     summary = fetcher.get_summary()
-    print(summary.to_string(index=False))
+    
+    if summary.empty:
+        print("❌ NO REAL DATA AVAILABLE")
+        print("💡 Get free API keys from:")
+        print("   - Twelve Data: https://twelvedata.com/apikey")
+        print("   - Alpha Vantage: https://www.alphavantage.co/support/#api-key")
+    else:
+        print(summary.to_string(index=False))
