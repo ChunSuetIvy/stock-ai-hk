@@ -24,31 +24,42 @@ class HKStockDataFetcher:
         
     def fetch_stock_data(self, symbol, period="1mo"):
         """Fetch stock data with caching"""
-        
-        # Check cache first
+        # Skip cache in production (Railway)
+        import os
+        if os.getenv('RAILWAY_ENVIRONMENT_NAME'):
+            # In Railway - always fetch fresh data
+            print(f"🔄 Fetching fresh data for {symbol}")
+            try:
+                ticker = yf.Ticker(symbol)
+                data = ticker.history(period=period)
+                if not data.empty:
+                    # Add calculated fields
+                    data['Daily_Return'] = data['Close'].pct_change()
+                    data['MA_5'] = data['Close'].rolling(window=5).mean()
+                    data['Volume_Ratio'] = data['Volume'] / data['Volume'].rolling(window=5).mean()
+                return data
+            except Exception as e:
+                print(f"❌ Error fetching {symbol}: {str(e)}")
+                return pd.DataFrame()
+        # Local development - use cache
         cache_key = f"{symbol}_{period}"
         if cache_key in self.cache:
             cached_time, cached_data = self.cache[cache_key]
             if (datetime.now() - cached_time).seconds < self.cache_duration:
                 print(f"📦 Using cached data for {symbol}")
                 return cached_data
-        
-        # Fetch fresh data
+            # Fetch fresh data
         print(f"🔄 Fetching fresh data for {symbol}")
         try:
             ticker = yf.Ticker(symbol)
             data = ticker.history(period=period)
-            
             # Cache the result
             self.cache[cache_key] = (datetime.now(), data)
-            
             # Add some calculated fields
             data['Daily_Return'] = data['Close'].pct_change()
             data['MA_5'] = data['Close'].rolling(window=5).mean()
             data['Volume_Ratio'] = data['Volume'] / data['Volume'].rolling(window=5).mean()
-            
             return data
-            
         except Exception as e:
             print(f"❌ Error fetching {symbol}: {str(e)}")
             return pd.DataFrame()
