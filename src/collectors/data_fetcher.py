@@ -9,7 +9,7 @@ import numpy as np
 import requests
 
 class HKStockDataFetcher:
-    """Hong Kong Stock Data Fetcher - Real Data Only"""
+    """Hong Kong Stock Data Fetcher - With Alltick API and Fallback Data"""
     
     def __init__(self):
         self.stocks = {
@@ -24,12 +24,12 @@ class HKStockDataFetcher:
         self.cache = {}
         self.cache_duration = 300
         
-        # API Keys - GET THESE FREE KEYS
+        # API Keys - Updated for Alltick
+        self.alltick_key = os.getenv('ALLTICK_API_KEY', '')
         self.twelve_data_key = os.getenv('TWELVE_DATA_API_KEY', '')
-        self.alpha_vantage_key = os.getenv('ALPHA_VANTAGE_API_KEY', '')
         
     def fetch_stock_data(self, symbol, period="1mo"):
-        """Fetch REAL stock data only - no simulation"""
+        """Fetch stock data - tries real APIs first, then fallback"""
         cache_key = f"{symbol}_{period}"
         
         # Check cache first
@@ -39,13 +39,13 @@ class HKStockDataFetcher:
                 print(f"📦 Using cached data for {symbol}")
                 return cached_data
         
-        print(f"🔄 Fetching REAL data for {symbol}")
+        print(f"🔄 Fetching data for {symbol}")
         
-        # Try multiple REAL data sources
+        # Try multiple REAL data sources in order
         data_sources = [
-            self._fetch_twelve_data,  # Best for international stocks
-            self._fetch_alpha_vantage,
-            self._fetch_yfinance_with_retry,
+            self._fetch_alltick_data,    # Primary - Alltick
+            self._fetch_twelve_data,     # Secondary - Twelve Data
+            self._fetch_yfinance_with_retry,  # Tertiary - yfinance
         ]
         
         data = pd.DataFrame()
@@ -58,10 +58,11 @@ class HKStockDataFetcher:
                 print(f"✅ Got {data_source} data for {symbol}")
                 break
         
+        # If no real data, use fallback data
         if data.empty:
-            print(f"❌ NO REAL DATA AVAILABLE for {symbol}")
-            # Return empty DataFrame instead of fake data
-            return pd.DataFrame()
+            print(f"⚠️ No real data for {symbol}, using fallback data")
+            data = self._generate_fallback_data(symbol)
+            data_source = "fallback"
         
         # Add technical indicators
         data = self._add_technical_indicators(data)
@@ -72,20 +73,74 @@ class HKStockDataFetcher:
             
         return data
     
+    def _fetch_alltick_data(self, symbol, period):
+        """Get real data from Alltick API"""
+        try:
+            if not self.alltick_key:
+                print("   ⚠️ Alltick API key not set")
+                return pd.DataFrame()
+                
+            print(f"   Trying Alltick for {symbol}...")
+            
+            # Alltick API endpoint for historical data
+            url = "https://api.alltick.co/v1/historical"
+            params = {
+                'symbol': symbol,
+                'interval': '1d',
+                'apikey': self.alltick_key,
+                'outputsize': 30
+            }
+            
+            response = requests.get(url, params=params, timeout=15)
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                if "data" in data and data["data"]:
+                    records = []
+                    for item in data["data"]:
+                        records.append({
+                            'Date': item['datetime'],
+                            'Open': float(item['open']),
+                            'High': float(item['high']),
+                            'Low': float(item['low']),
+                            'Close': float(item['close']),
+                            'Volume': int(float(item['volume'])) if item['volume'] else 1000000
+                        })
+                    
+                    df = pd.DataFrame(records)
+                    df['Date'] = pd.to_datetime(df['Date'])
+                    df = df.set_index('Date')
+                    df = df.sort_index()
+                    
+                    return df
+                else:
+                    print(f"   Alltick: No data for {symbol}")
+                    return pd.DataFrame()
+            else:
+                print(f"   Alltick API error: {response.status_code}")
+                return pd.DataFrame()
+                
+        except Exception as e:
+            print(f"   Alltick failed for {symbol}: {e}")
+            return pd.DataFrame()
+    
     def _fetch_twelve_data(self, symbol, period):
-        """Get real data from Twelve Data API (BEST for HK stocks)"""
+        """Get real data from Twelve Data API"""
         try:
             if not self.twelve_data_key:
                 return pd.DataFrame()
                 
             print(f"   Trying Twelve Data for {symbol}...")
             
-            # Twelve Data API endpoint
+            # Convert symbol for Twelve Data format
+            twelve_symbol = symbol.replace('.HK', ':HKG')
+            
             url = "https://api.twelvedata.com/time_series"
             params = {
-                'symbol': symbol,
+                'symbol': twelve_symbol,
                 'interval': '1day',
-                'outputsize': 30,  # Last 30 days
+                'outputsize': 30,
                 'apikey': self.twelve_data_key,
                 'format': 'JSON'
             }
@@ -95,7 +150,7 @@ class HKStockDataFetcher:
             if response.status_code == 200:
                 data = response.json()
                 
-                if "values" in data:
+                if "values" in data and data["values"]:
                     values = data["values"]
                     
                     # Convert to DataFrame
@@ -107,7 +162,7 @@ class HKStockDataFetcher:
                             'High': float(item['high']),
                             'Low': float(item['low']),
                             'Close': float(item['close']),
-                            'Volume': int(float(item['volume']))
+                            'Volume': int(float(item['volume'])) if item['volume'] else 1000000
                         })
                     
                     df = pd.DataFrame(records)
@@ -127,71 +182,13 @@ class HKStockDataFetcher:
             print(f"   Twelve Data failed for {symbol}: {e}")
             return pd.DataFrame()
     
-    def _fetch_alpha_vantage(self, symbol, period):
-        """Get real data from Alpha Vantage"""
-        try:
-            if not self.alpha_vantage_key:
-                return pd.DataFrame()
-                
-            print(f"   Trying Alpha Vantage for {symbol}...")
-            
-            # Alpha Vantage API endpoint
-            url = "https://www.alphavantage.co/query"
-            params = {
-                'function': 'TIME_SERIES_DAILY',
-                'symbol': symbol,
-                'apikey': self.alpha_vantage_key,
-                'outputsize': 'compact'
-            }
-            
-            response = requests.get(url, params=params, timeout=15)
-            
-            if response.status_code == 200:
-                data = response.json()
-                
-                if "Time Series (Daily)" in data:
-                    time_series = data["Time Series (Daily)"]
-                    
-                    # Convert to DataFrame
-                    records = []
-                    for date, values in time_series.items():
-                        records.append({
-                            'Date': date,
-                            'Open': float(values['1. open']),
-                            'High': float(values['2. high']),
-                            'Low': float(values['3. low']),
-                            'Close': float(values['4. close']),
-                            'Volume': int(values['5. volume'])
-                        })
-                    
-                    df = pd.DataFrame(records)
-                    df['Date'] = pd.to_datetime(df['Date'])
-                    df = df.set_index('Date')
-                    df = df.sort_index()
-                    
-                    # Get only last 30 days
-                    if len(df) > 30:
-                        df = df.tail(30)
-                    
-                    return df
-                else:
-                    print(f"   Alpha Vantage: No time series for {symbol}")
-                    return pd.DataFrame()
-            else:
-                print(f"   Alpha Vantage API error: {response.status_code}")
-                return pd.DataFrame()
-                
-        except Exception as e:
-            print(f"   Alpha Vantage failed for {symbol}: {e}")
-            return pd.DataFrame()
-    
     def _fetch_yfinance_with_retry(self, symbol, period):
         """Try yfinance with multiple attempts"""
-        for attempt in range(3):
+        for attempt in range(2):  # Reduced to 2 attempts for speed
             try:
                 print(f"   Trying yfinance (attempt {attempt + 1}) for {symbol}...")
                 ticker = yf.Ticker(symbol)
-                data = ticker.history(period=period, timeout=15)
+                data = ticker.history(period=period, timeout=10)
                 
                 if not data.empty:
                     return data
@@ -201,12 +198,58 @@ class HKStockDataFetcher:
             except Exception as e:
                 print(f"   yfinance attempt {attempt + 1} failed: {e}")
                 
-            time.sleep(1)  # Wait before retry
+            time.sleep(1)
             
         return pd.DataFrame()
     
+    def _generate_fallback_data(self, symbol):
+        """Generate realistic fallback data when APIs fail"""
+        print(f"   Generating fallback data for {symbol}")
+        
+        # Create date range for the last 30 days
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=30)
+        date_range = pd.date_range(start=start_date, end=end_date, freq='D')
+        
+        # Realistic base prices for HK stocks
+        base_prices = {
+            "0700.HK": 320.0,  # Tencent
+            "9988.HK": 85.0,   # Alibaba
+            "0005.HK": 60.0,   # HSBC
+            "0941.HK": 68.0,   # China Mobile
+            "1299.HK": 75.0    # AIA Group
+        }
+        
+        base_price = base_prices.get(symbol, 50.0)
+        current_price = base_price
+        
+        data = []
+        for i, date in enumerate(date_range):
+            # Simulate realistic price movements
+            volatility = 0.02
+            change = np.random.normal(0, volatility)
+            current_price = max(1.0, current_price * (1 + change))  # Prevent negative prices
+            
+            open_price = current_price * (1 + np.random.normal(0, 0.005))
+            high = max(open_price, current_price) * (1 + abs(np.random.normal(0, 0.01)))
+            low = min(open_price, current_price) * (1 - abs(np.random.normal(0, 0.01)))
+            close_price = current_price
+            
+            volume = np.random.randint(1000000, 5000000)
+            
+            data.append({
+                'Open': open_price,
+                'High': high,
+                'Low': low,
+                'Close': close_price,
+                'Volume': volume
+            })
+        
+        df = pd.DataFrame(data, index=date_range)
+        return df
+    
     def _add_technical_indicators(self, data):
-        """Add technical indicators to real data"""
+        """Add technical indicators to data"""
         if data.empty:
             return data
             
@@ -229,7 +272,7 @@ class HKStockDataFetcher:
         return data
     
     def get_summary(self):
-        """Get summary - returns empty if no real data"""
+        """Get summary with data source information"""
         summary = []
         
         for symbol, name in self.stocks.items():
@@ -238,10 +281,10 @@ class HKStockDataFetcher:
                 
                 if not data.empty and len(data) > 1:
                     latest = data.iloc[-1]
-                    prev = data.iloc[-2]
+                    prev = data.iloc[-2] if len(data) > 1 else latest
                     
                     price_change = latest['Close'] - prev['Close']
-                    change_percent = (price_change / prev['Close']) * 100
+                    change_percent = (price_change / prev['Close']) * 100 if prev['Close'] != 0 else 0
                     
                     summary.append({
                         'Symbol': symbol,
@@ -251,35 +294,51 @@ class HKStockDataFetcher:
                         'Change %': round(float(change_percent), 2),
                         'Volume': int(latest['Volume']),
                         'Data_Source': data.attrs.get('data_source', 'unknown'),
-                        'RSI': round(float(latest.get('RSI', 0)), 1),
-                        'has_real_data': True
+                        'RSI': round(float(latest.get('RSI', 50)), 1),
+                        'has_real_data': data.attrs.get('data_source') != 'fallback'
                     })
                 else:
-                    # NO DATA - don't include in summary
-                    print(f"❌ No real data for {symbol}, skipping...")
-                    continue
+                    # Fallback entry
+                    summary.append({
+                        'Symbol': symbol,
+                        'Name': name,
+                        'Price': 0,
+                        'Change': 0,
+                        'Change %': 0,
+                        'Volume': 0,
+                        'Data_Source': 'error',
+                        'RSI': 50,
+                        'has_real_data': False
+                    })
                     
             except Exception as e:
                 print(f"Error in summary for {symbol}: {e}")
-                continue
+                summary.append({
+                    'Symbol': symbol,
+                    'Name': name,
+                    'Price': 0,
+                    'Change': 0,
+                    'Change %': 0,
+                    'Volume': 0,
+                    'Data_Source': 'error',
+                    'RSI': 50,
+                    'has_real_data': False
+                })
         
-        if not summary:
-            print("⚠️ NO REAL DATA AVAILABLE FOR ANY STOCK")
-            
         return pd.DataFrame(summary)
 
-# Test with real data only
+# Test the fetcher
 if __name__ == "__main__":
     fetcher = HKStockDataFetcher()
     
-    print("\n📊 REAL Stock Data Test:")
+    print("\n📊 Stock Data Test:")
     print("="*60)
     summary = fetcher.get_summary()
     
     if summary.empty:
-        print("❌ NO REAL DATA AVAILABLE")
-        print("💡 Get free API keys from:")
-        print("   - Twelve Data: https://twelvedata.com/apikey")
-        print("   - Alpha Vantage: https://www.alphavantage.co/support/#api-key")
+        print("❌ NO DATA AVAILABLE")
     else:
         print(summary.to_string(index=False))
+        print(f"\n📈 Data Sources:")
+        for _, row in summary.iterrows():
+            print(f"   {row['Symbol']}: {row['Data_Source']} (Real: {row['has_real_data']})")
