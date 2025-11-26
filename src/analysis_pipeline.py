@@ -7,7 +7,7 @@ from collectors.data_fetcher import HKStockDataFetcher
 from collectors.news_collector import NewsCollector
 from analyzers.sentiment_analyzer import SentimentAnalyzer
 from analyzers.indicators import TechnicalIndicators
-from analyzers.analysis_orchestrator import AnalysisOrchestrator  # NEW
+from analyzers.analysis_orchestrator import AnalysisOrchestrator  # NEW - Make sure this import works
 from database import StockDatabase
 import pandas as pd
 from datetime import datetime
@@ -20,13 +20,13 @@ class StockAnalysisPipeline:
         self.news_collector = NewsCollector()
         self.sentiment_analyzer = SentimentAnalyzer()
         self.technical_analyzer = TechnicalIndicators()
-        self.analysis_orchestrator = AnalysisOrchestrator()  # NEW
+        self.analysis_orchestrator = AnalysisOrchestrator()  # NEW - Initialize the orchestrator
         self.database = StockDatabase()
         
         self.analysis_results = {}
         
     def analyze_single_stock(self, symbol):
-        """Complete analysis for one stock with robust error handling"""
+        """Complete analysis for one stock using the new AI engine"""
         print(f"\n🔍 Analyzing {symbol}...")
         
         # Initialize results with basic structure
@@ -46,8 +46,8 @@ class StockAnalysisPipeline:
                 return self._create_default_results(results)
             
             # Track data source
-            results['data_source'] = price_data.attrs.get('data_source', 'unknown')
-            results['has_real_data'] = price_data.attrs.get('data_source') != 'fallback'
+            results['data_source'] = 'yfinance' if not self.fetcher.is_railway else 'simulated'
+            results['has_real_data'] = not self.fetcher.is_railway
             
             # 2. Fetch news data
             try:
@@ -59,12 +59,15 @@ class StockAnalysisPipeline:
                 news = []
             
             # 3. USE NEW ANALYSIS ORCHESTRATOR FOR COMPREHENSIVE ANALYSIS
+            print(f"  🤖 Using AI analysis engine for {symbol}")
             analysis_result = self.analysis_orchestrator.analyze_stock(symbol, price_data, news)
             
             # 4. MAP NEW ANALYSIS RESULTS TO EXISTING FRONTEND STRUCTURE
             results.update(self._map_analysis_to_frontend_format(analysis_result, price_data))
             
-            print(f"  ✅ Analysis complete for {symbol} (Source: {results['data_source']})")
+            print(f"  ✅ AI analysis complete for {symbol}")
+            print(f"     Technical Score: {results.get('technical_score', 'N/A')}")
+            print(f"     Risk Level: {results.get('risk_level', 'N/A')}")
             
         except Exception as e:
             print(f"  ❌ Analysis failed for {symbol}: {str(e)}")
@@ -261,51 +264,6 @@ class StockAnalysisPipeline:
             if row.get('technical_insights') and len(row['technical_insights']) > 0:
                 print(f"   💡 {row['technical_insights'][0]}")
             print()
-        
-        # Enhanced Market Overview
-        print("\n📈 ENHANCED MARKET OVERVIEW")
-        print("-"*50)
-        
-        bullish = len(df[df['technical_signal'].str.contains('BULLISH')])
-        bearish = len(df[df['technical_signal'].str.contains('BEARISH')])
-        neutral = len(df[df['technical_signal'].str.contains('NEUTRAL')])
-        
-        print(f"Bullish Stocks: {bullish}")
-        print(f"Bearish Stocks: {bearish}") 
-        print(f"Neutral Stocks: {neutral}")
-        
-        # Risk distribution
-        low_risk = len(df[df['risk_level'] == 'LOW'])
-        mod_risk = len(df[df['risk_level'] == 'MODERATE'])
-        high_risk = len(df[df['risk_level'] == 'HIGH'])
-        
-        print(f"\nRisk Distribution:")
-        print(f"  Low Risk: {low_risk} stocks")
-        print(f"  Moderate Risk: {mod_risk} stocks")
-        print(f"  High Risk: {high_risk} stocks")
-        
-        avg_technical = df['technical_score'].mean()
-        avg_sentiment = df['sentiment_score'].mean()
-        avg_risk = df['risk_score'].mean()
-        
-        print(f"\nAverage Scores:")
-        print(f"  Technical: {avg_technical:.1f}/100")
-        print(f"  Sentiment: {avg_sentiment:+.3f}")
-        print(f"  Risk: {avg_risk:.1f}/100")
-        
-        # Overall market sentiment
-        if avg_sentiment > 0.1 and avg_technical > 60:
-            market_mood = "😊 STRONGLY POSITIVE"
-        elif avg_sentiment > 0.1 or avg_technical > 60:
-            market_mood = "😊 POSITIVE"
-        elif avg_sentiment < -0.1 and avg_technical < 40:
-            market_mood = "😟 STRONGLY NEGATIVE"
-        elif avg_sentiment < -0.1 or avg_technical < 40:
-            market_mood = "😟 NEGATIVE"
-        else:
-            market_mood = "😐 NEUTRAL"
-        
-        print(f"\nOverall Market Mood: {market_mood}")
         
         return df
 
