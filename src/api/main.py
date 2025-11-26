@@ -28,10 +28,14 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Enable CORS for frontend
+# FIXED CORS - Add your Vercel domain
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "https://stock-ai-hk-6wox.vercel.app",  # Your Vercel domain
+        "http://localhost:3000",  # Local development
+        "http://127.0.0.1:3000",  # Local development
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -153,7 +157,7 @@ def get_market_summary():
         }
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return {"error": str(e)}
 
 @app.get("/stock/{symbol}/history")
 def get_stock_history(symbol: str, days: int = 30):
