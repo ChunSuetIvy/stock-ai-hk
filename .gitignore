@@ -1,0 +1,10 @@
+.env
+.env.local
+__pycache__/
+*.py[cod]
+*.pyc
+.DS_Store
+data/raw/
+data/processed/
+*.csv
+*.json
