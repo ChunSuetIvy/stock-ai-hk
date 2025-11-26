@@ -5,7 +5,7 @@ from typing import Dict, List
 from datetime import datetime, timedelta
 import logging
 from .sentiment_analyzer import SentimentAnalyzer
-a
+
 class EnhancedSentimentEngine:
     """Enhanced sentiment analysis with scoring and trends"""
     
