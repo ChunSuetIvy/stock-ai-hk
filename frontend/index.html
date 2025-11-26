@@ -24,6 +24,13 @@
             font-size: 2.5em;
             text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
         }
+        .api-status {
+            text-align: center;
+            padding: 10px;
+            background: rgba(255,255,255,0.9);
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
         .market-summary {
             background: white;
             border-radius: 15px;
@@ -150,6 +157,10 @@
     <div class="container">
         <h1>🤖 HK Stock AI Analysis</h1>
         
+        <div class="api-status" id="apiStatus">
+            Connecting to API...
+        </div>
+        
         <button class="refresh-btn" onclick="fetchData()">🔄 Refresh Data</button>
         
         <div class="market-summary" id="marketSummary">
@@ -165,61 +176,78 @@
     </div>
 
     <script>
-        const API_BASE = 'http://localhost:8000';
+        // REPLACE WITH YOUR RAILWAY URL
+        const API_BASE = 'https://web-production-387c9.up.railway.app';
+        // For local testing: const API_BASE = 'http://localhost:8000';
+        
+        async function checkAPIStatus() {
+            try {
+                const response = await fetch(`${API_BASE}/`);
+                if (response.ok) {
+                    document.getElementById('apiStatus').innerHTML = '🟢 API Connected';
+                    document.getElementById('apiStatus').style.background = '#d4edda';
+                    return true;
+                }
+            } catch (error) {
+                document.getElementById('apiStatus').innerHTML = '🔴 API Offline - Using Local Mode';
+                document.getElementById('apiStatus').style.background = '#f8d7da';
+                return false;
+            }
+        }
         
         async function fetchData() {
-			try {
-				// Show loading state
-				document.getElementById('summaryGrid').innerHTML = '<div class="loading">Loading...</div>';
-				document.getElementById('stocksGrid').innerHTML = '<div class="loading">Analyzing stocks...</div>';
-				
-				// Fetch market summary first
-				const summaryResponse = await fetch(`${API_BASE}/market/summary`);
-				const summary = await summaryResponse.json();
-				
-				// Update market summary immediately
-				updateMarketSummary(summary);
-				
-				// Try to fetch individual stock data as fallback
-				try {
-					const analysisResponse = await fetch(`${API_BASE}/analysis/all`);
-					if (analysisResponse.ok) {
-						const analysis = await analysisResponse.json();
-						updateStocksGrid(analysis.results);
-					} else {
-						// Fallback: fetch individual stocks
-						await fetchIndividualStocks();
-					}
-				} catch (error) {
-					console.log('Falling back to individual stock fetching...');
-					await fetchIndividualStocks();
-				}
-				
-			} catch (error) {
-				console.error('Error fetching data:', error);
-				document.getElementById('stocksGrid').innerHTML = 
-					'<div class="loading">Error loading data. Make sure the API server is running.</div>';
-			}
-		}
-		async function fetchIndividualStocks() {
-			const stocksResponse = await fetch(`${API_BASE}/stocks`);
-			const stocksList = await stocksResponse.json();
-			
-			const results = [];
-			for (const stock of stocksList.stocks) {
-				try {
-					const response = await fetch(`${API_BASE}/analysis/${stock.symbol}`);
-					if (response.ok) {
-						const data = await response.json();
-						results.push(data);
-					}
-				} catch (error) {
-					console.error(`Error fetching ${stock.symbol}:`, error);
-				}
-			}
-			
-			updateStocksGrid(results);
-		}
+            const apiOnline = await checkAPIStatus();
+            if (!apiOnline) {
+                console.log('API offline, please check Railway deployment');
+                return;
+            }
+            
+            try {
+                // Show loading state
+                document.getElementById('summaryGrid').innerHTML = '<div class="loading">Loading...</div>';
+                document.getElementById('stocksGrid').innerHTML = '<div class="loading">Analyzing stocks...</div>';
+                
+                // Fetch market summary
+                const summaryResponse = await fetch(`${API_BASE}/market/summary`);
+                const summary = await summaryResponse.json();
+                updateMarketSummary(summary);
+                
+                // Fetch all stock analysis
+                const analysisResponse = await fetch(`${API_BASE}/analysis/all`);
+                if (analysisResponse.ok) {
+                    const analysis = await analysisResponse.json();
+                    updateStocksGrid(analysis.results);
+                } else {
+                    // Fallback to individual fetching
+                    await fetchIndividualStocks();
+                }
+                
+            } catch (error) {
+                console.error('Error fetching data:', error);
+                document.getElementById('stocksGrid').innerHTML = 
+                    '<div class="loading">Error loading data. Check console for details.</div>';
+            }
+        }
+        
+        async function fetchIndividualStocks() {
+            const stocksResponse = await fetch(`${API_BASE}/stocks`);
+            const stocksList = await stocksResponse.json();
+            
+            const results = [];
+            for (const stock of stocksList.stocks) {
+                try {
+                    const response = await fetch(`${API_BASE}/analysis/${stock.symbol}`);
+                    if (response.ok) {
+                        const data = await response.json();
+                        results.push(data);
+                    }
+                } catch (error) {
+                    console.error(`Error fetching ${stock.symbol}:`, error);
+                }
+            }
+            
+            updateStocksGrid(results);
+        }
         
         function updateMarketSummary(summary) {
             const summaryHTML = `
