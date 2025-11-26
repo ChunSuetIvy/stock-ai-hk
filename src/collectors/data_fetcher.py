@@ -4,9 +4,10 @@ import pandas as pd
 from datetime import datetime, timedelta
 import time
 import json
+import os
 
 class HKStockDataFetcher:
-    """Your main data collection class"""
+    """Your main data collection class - FIXED FOR RAILWAY"""
     
     def __init__(self):
         # Your 5 target stocks
@@ -23,44 +24,33 @@ class HKStockDataFetcher:
         self.cache_duration = 300  # 5 minutes
         
     def fetch_stock_data(self, symbol, period="1mo"):
-        """Fetch stock data with caching"""
-        # Skip cache in production (Railway)
-        import os
-        if os.getenv('RAILWAY_ENVIRONMENT_NAME'):
-            # In Railway - always fetch fresh data
-            print(f"🔄 Fetching fresh data for {symbol}")
-            try:
-                ticker = yf.Ticker(symbol)
-                data = ticker.history(period=period)
-                if not data.empty:
-                    # Add calculated fields
-                    data['Daily_Return'] = data['Close'].pct_change()
-                    data['MA_5'] = data['Close'].rolling(window=5).mean()
-                    data['Volume_Ratio'] = data['Volume'] / data['Volume'].rolling(window=5).mean()
-                return data
-            except Exception as e:
-                print(f"❌ Error fetching {symbol}: {str(e)}")
-                return pd.DataFrame()
-        # Local development - use cache
+        """Fetch stock data with caching - FIXED FOR PRODUCTION"""
         cache_key = f"{symbol}_{period}"
+        
+        # Check cache first (works in both environments)
         if cache_key in self.cache:
             cached_time, cached_data = self.cache[cache_key]
             if (datetime.now() - cached_time).seconds < self.cache_duration:
                 print(f"📦 Using cached data for {symbol}")
                 return cached_data
-            # Fetch fresh data
         
         print(f"🔄 Fetching fresh data for {symbol}")
         try:
             ticker = yf.Ticker(symbol)
-            data = ticker.history(period=period)
+            # Add timeout for production
+            data = ticker.history(period=period, timeout=10)
+            
             if not data.empty:
                 # Add calculated fields
                 data['Daily_Return'] = data['Close'].pct_change()
                 data['MA_5'] = data['Close'].rolling(window=5).mean()
                 data['Volume_Ratio'] = data['Volume'] / data['Volume'].rolling(window=5).mean()
+                
+                # Cache the result
+                self.cache[cache_key] = (datetime.now(), data)
             else:
                 print(f"⚠️ Empty data returned for {symbol}")
+                
             return data
         except Exception as e:
             print(f"❌ Error fetching {symbol}: {str(e)}")
@@ -81,14 +71,14 @@ class HKStockDataFetcher:
         return all_data
     
     def get_summary(self):
-        """Get a summary of all stocks"""
+        """Get a summary of all stocks with error handling"""
         summary = []
         
         for symbol, name in self.stocks.items():
             data = self.fetch_stock_data(symbol, period="5d")
-            if not data.empty:
+            if not data.empty and len(data) > 1:
                 latest = data.iloc[-1]
-                prev = data.iloc[-2] if len(data) > 1 else latest
+                prev = data.iloc[-2]
                 
                 summary.append({
                     'Symbol': symbol,
@@ -97,6 +87,16 @@ class HKStockDataFetcher:
                     'Change': round(latest['Close'] - prev['Close'], 2),
                     'Change %': round(((latest['Close'] / prev['Close']) - 1) * 100, 2),
                     'Volume': int(latest['Volume'])
+                })
+            else:
+                # Add placeholder for failed fetches
+                summary.append({
+                    'Symbol': symbol,
+                    'Name': name,
+                    'Price': 0,
+                    'Change': 0,
+                    'Change %': 0,
+                    'Volume': 0
                 })
         
         return pd.DataFrame(summary)
