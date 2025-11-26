@@ -159,14 +159,33 @@
             text-align: center;
             margin-bottom: 20px;
         }
+        .env-badge {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            background: #ff6b6b;
+            color: white;
+            padding: 5px 10px;
+            border-radius: 15px;
+            font-size: 0.8em;
+            font-weight: bold;
+        }
+        .env-badge.local {
+            background: #28a745;
+        }
+        .env-badge.railway {
+            background: #6f42c1;
+        }
     </style>
 </head>
 <body>
+    <div id="envBadge" class="env-badge">Detecting Environment...</div>
+    
     <div class="container">
         <h1>🤖 HK Stock AI Analysis</h1>
         
         <div class="api-status" id="apiStatus">
-            Connecting to API...
+            Detecting environment and connecting to API...
         </div>
         
         <button class="refresh-btn" onclick="fetchData()">🔄 Refresh Data</button>
@@ -184,15 +203,56 @@
     </div>
 
     <script>
-        // REPLACE WITH YOUR ACTUAL RAILWAY URL
-        const API_BASE = 'https://web-production-387c9.up.railway.app';
+        // Auto-detect environment and set API base
+        function detectEnvironment() {
+            const hostname = window.location.hostname;
+            const port = window.location.port;
+            
+            // If running on Vercel (production)
+            if (hostname.includes('vercel.app') || hostname === 'stock-ai-hk-6wox.vercel.app') {
+                return {
+                    apiBase: 'https://web-production-387c9.up.railway.app',
+                    environment: 'Production (Vercel + Railway)',
+                    badgeClass: 'railway'
+                };
+            }
+            // If running locally
+            else if (hostname === 'localhost' || hostname === '127.0.0.1') {
+                return {
+                    apiBase: 'http://localhost:8000',
+                    environment: 'Local Development',
+                    badgeClass: 'local'
+                };
+            }
+            // Default to Railway for any other case
+            else {
+                return {
+                    apiBase: 'https://web-production-387c9.up.railway.app',
+                    environment: 'Unknown Environment - Using Railway',
+                    badgeClass: 'railway'
+                };
+            }
+        }
+
+        // Initialize environment
+        const env = detectEnvironment();
+        const API_BASE = env.apiBase;
         
+        // Update environment badge
+        const envBadge = document.getElementById('envBadge');
+        envBadge.textContent = env.environment;
+        envBadge.className = `env-badge ${env.badgeClass}`;
+        
+        console.log(`🌍 Environment: ${env.environment}`);
+        console.log(`🔗 API Base: ${API_BASE}`);
+
         async function checkAPIStatus() {
             try {
                 const response = await fetch(`${API_BASE}/`);
                 if (response.ok) {
                     const data = await response.json();
-                    document.getElementById('apiStatus').innerHTML = `🟢 API Connected - ${data.message}`;
+                    document.getElementById('apiStatus').innerHTML = 
+                        `🟢 API Connected - ${data.message} (${env.environment})`;
                     document.getElementById('apiStatus').style.background = '#d4edda';
                     return true;
                 } else {
@@ -200,7 +260,7 @@
                 }
             } catch (error) {
                 document.getElementById('apiStatus').innerHTML = 
-                    `🔴 API Connection Failed: ${error.message}`;
+                    `🔴 API Connection Failed: ${error.message} (${env.environment})`;
                 document.getElementById('apiStatus').style.background = '#f8d7da';
                 console.error('API Connection Error:', error);
                 return false;
@@ -313,15 +373,15 @@
                 </div>
                 <div class="summary-card">
                     <h3>Average Sentiment</h3>
-                    <div class="value">${summary.average_sentiment.toFixed(3)}</div>
+                    <div class="value">${summary.average_sentiment ? summary.average_sentiment.toFixed(3) : '0.000'}</div>
                 </div>
                 <div class="summary-card">
                     <h3>Best Performer</h3>
-                    <div class="value positive">${summary.best_performer.symbol}<br>+${summary.best_performer.change}%</div>
+                    <div class="value positive">${summary.best_performer ? summary.best_performer.symbol : 'N/A'}<br>${summary.best_performer ? '+' + summary.best_performer.change + '%' : 'N/A'}</div>
                 </div>
                 <div class="summary-card">
                     <h3>Worst Performer</h3>
-                    <div class="value negative">${summary.worst_performer.symbol}<br>${summary.worst_performer.change}%</div>
+                    <div class="value negative">${summary.worst_performer ? summary.worst_performer.symbol : 'N/A'}<br>${summary.worst_performer ? summary.worst_performer.change + '%' : 'N/A'}</div>
                 </div>
             `;
             
@@ -336,12 +396,12 @@
                     <div style="font-size: 0.8em; color: #dc3545;">${error}</div>
                 </div>
                 <div class="summary-card">
-                    <h3>API</h3>
-                    <div class="value">Offline</div>
+                    <h3>Environment</h3>
+                    <div class="value">${env.environment}</div>
                 </div>
                 <div class="summary-card">
-                    <h3>Data</h3>
-                    <div class="value">Unavailable</div>
+                    <h3>API</h3>
+                    <div class="value">${API_BASE}</div>
                 </div>
                 <div class="summary-card">
                     <h3>Action</h3>
@@ -364,7 +424,7 @@
                         <div class="stock-header">
                             <div>
                                 <div class="stock-symbol">${stock.symbol}</div>
-                                <div style="color: #6c757d; font-size: 0.9em;">${stock.name}</div>
+                                <div style="color: #6c757d; font-size: 0.9em;">${stock.name || stock.symbol}</div>
                             </div>
                             <div class="stock-price">
                                 $${stock.price ? stock.price.toFixed(2) : 'N/A'}
@@ -398,6 +458,7 @@
                         <div class="recommendation ${recClass}">
                             ${stock.recommendation || 'NO DATA'}
                         </div>
+                        ${stock.error ? `<div style="color: #dc3545; font-size: 0.8em; margin-top: 10px;">⚠️ ${stock.error}</div>` : ''}
                     </div>
                 `;
             });
@@ -412,19 +473,36 @@
                     <div class="value negative">Backend Offline</div>
                 </div>
                 <div class="summary-card">
+                    <h3>Environment</h3>
+                    <div class="value">${env.environment}</div>
+                </div>
+                <div class="summary-card">
+                    <h3>API URL</h3>
+                    <div class="value" style="font-size: 0.8em;">${API_BASE}</div>
+                </div>
+                <div class="summary-card">
                     <h3>Action</h3>
-                    <div class="value">Check Railway</div>
+                    <div class="value">Check Backend</div>
                 </div>
             `;
             
             document.getElementById('stocksGrid').innerHTML = `
                 <div class="stock-card">
                     <div class="stock-header">
-                        <div class="stock-symbol">Backend Offline</div>
+                        <div class="stock-symbol">Backend Connection Issue</div>
                     </div>
                     <div style="text-align: center; padding: 20px; color: #dc3545;">
-                        🔴 Cannot connect to backend API<br>
-                        Please check your Railway deployment
+                        🔴 Cannot connect to backend API<br><br>
+                        <strong>Environment:</strong> ${env.environment}<br>
+                        <strong>API URL:</strong> ${API_BASE}<br><br>
+                        <div style="text-align: left; font-size: 0.9em;">
+                            <strong>Local Development:</strong><br>
+                            • Make sure your backend is running on localhost:8000<br>
+                            • Run: <code>python src/api/main.py</code><br><br>
+                            <strong>Production:</strong><br>
+                            • Check Railway deployment status<br>
+                            • Verify the API URL is correct
+                        </div>
                     </div>
                 </div>
             `;
