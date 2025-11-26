@@ -151,6 +151,14 @@
         .refresh-btn:hover {
             background: #f0f0f0;
         }
+        .error-card {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            margin-bottom: 20px;
+        }
     </style>
 </head>
 <body>
@@ -176,21 +184,25 @@
     </div>
 
     <script>
-        // REPLACE WITH YOUR RAILWAY URL
+        // REPLACE WITH YOUR ACTUAL RAILWAY URL
         const API_BASE = 'https://web-production-387c9.up.railway.app';
-        // For local testing: const API_BASE = 'http://localhost:8000';
         
         async function checkAPIStatus() {
             try {
                 const response = await fetch(`${API_BASE}/`);
                 if (response.ok) {
-                    document.getElementById('apiStatus').innerHTML = '🟢 API Connected';
+                    const data = await response.json();
+                    document.getElementById('apiStatus').innerHTML = `🟢 API Connected - ${data.message}`;
                     document.getElementById('apiStatus').style.background = '#d4edda';
                     return true;
+                } else {
+                    throw new Error(`HTTP ${response.status}`);
                 }
             } catch (error) {
-                document.getElementById('apiStatus').innerHTML = '🔴 API Offline - Using Local Mode';
+                document.getElementById('apiStatus').innerHTML = 
+                    `🔴 API Connection Failed: ${error.message}`;
                 document.getElementById('apiStatus').style.background = '#f8d7da';
+                console.error('API Connection Error:', error);
                 return false;
             }
         }
@@ -198,55 +210,97 @@
         async function fetchData() {
             const apiOnline = await checkAPIStatus();
             if (!apiOnline) {
-                console.log('API offline, please check Railway deployment');
+                showFallbackData();
                 return;
             }
             
             try {
                 // Show loading state
-                document.getElementById('summaryGrid').innerHTML = '<div class="loading">Loading...</div>';
+                document.getElementById('summaryGrid').innerHTML = '<div class="loading">Loading market data...</div>';
                 document.getElementById('stocksGrid').innerHTML = '<div class="loading">Analyzing stocks...</div>';
                 
                 // Fetch market summary
+                console.log('Fetching market summary...');
                 const summaryResponse = await fetch(`${API_BASE}/market/summary`);
+                
+                if (!summaryResponse.ok) {
+                    throw new Error(`Market summary failed: ${summaryResponse.status}`);
+                }
+                
                 const summary = await summaryResponse.json();
-                updateMarketSummary(summary);
+                console.log('Market summary:', summary);
+                
+                // Check if summary has error
+                if (summary.error) {
+                    console.error('Market summary error:', summary.error);
+                    updateMarketSummaryWithError(summary.error);
+                } else {
+                    updateMarketSummary(summary);
+                }
                 
                 // Fetch all stock analysis
+                console.log('Fetching stock analysis...');
                 const analysisResponse = await fetch(`${API_BASE}/analysis/all`);
+                
                 if (analysisResponse.ok) {
                     const analysis = await analysisResponse.json();
-                    updateStocksGrid(analysis.results);
+                    console.log('Analysis response:', analysis);
+                    
+                    if (analysis.results && analysis.results.length > 0) {
+                        updateStocksGrid(analysis.results);
+                    } else {
+                        // Try individual fetching
+                        await fetchIndividualStocks();
+                    }
                 } else {
-                    // Fallback to individual fetching
+                    console.error('Analysis all failed, trying individual...');
                     await fetchIndividualStocks();
                 }
                 
             } catch (error) {
                 console.error('Error fetching data:', error);
-                document.getElementById('stocksGrid').innerHTML = 
-                    '<div class="loading">Error loading data. Check console for details.</div>';
+                showFallbackData();
             }
         }
         
         async function fetchIndividualStocks() {
-            const stocksResponse = await fetch(`${API_BASE}/stocks`);
-            const stocksList = await stocksResponse.json();
-            
-            const results = [];
-            for (const stock of stocksList.stocks) {
-                try {
-                    const response = await fetch(`${API_BASE}/analysis/${stock.symbol}`);
-                    if (response.ok) {
-                        const data = await response.json();
-                        results.push(data);
-                    }
-                } catch (error) {
-                    console.error(`Error fetching ${stock.symbol}:`, error);
+            try {
+                console.log('Fetching individual stocks...');
+                const stocksResponse = await fetch(`${API_BASE}/stocks`);
+                
+                if (!stocksResponse.ok) {
+                    throw new Error('Failed to fetch stocks list');
                 }
+                
+                const stocksList = await stocksResponse.json();
+                console.log('Stocks list:', stocksList);
+                
+                const results = [];
+                for (const stock of stocksList.stocks) {
+                    try {
+                        console.log(`Fetching analysis for ${stock.symbol}...`);
+                        const response = await fetch(`${API_BASE}/analysis/${stock.symbol}`);
+                        if (response.ok) {
+                            const data = await response.json();
+                            results.push(data);
+                        } else {
+                            console.warn(`Failed to fetch ${stock.symbol}: ${response.status}`);
+                        }
+                    } catch (error) {
+                        console.error(`Error fetching ${stock.symbol}:`, error);
+                    }
+                }
+                
+                if (results.length > 0) {
+                    updateStocksGrid(results);
+                } else {
+                    throw new Error('No stock data available');
+                }
+                
+            } catch (error) {
+                console.error('Individual fetch failed:', error);
+                showFallbackData();
             }
-            
-            updateStocksGrid(results);
         }
         
         function updateMarketSummary(summary) {
@@ -274,13 +328,36 @@
             document.getElementById('summaryGrid').innerHTML = summaryHTML;
         }
         
+        function updateMarketSummaryWithError(error) {
+            const summaryHTML = `
+                <div class="summary-card">
+                    <h3>Market Status</h3>
+                    <div class="value negative">Error</div>
+                    <div style="font-size: 0.8em; color: #dc3545;">${error}</div>
+                </div>
+                <div class="summary-card">
+                    <h3>API</h3>
+                    <div class="value">Offline</div>
+                </div>
+                <div class="summary-card">
+                    <h3>Data</h3>
+                    <div class="value">Unavailable</div>
+                </div>
+                <div class="summary-card">
+                    <h3>Action</h3>
+                    <div class="value">Check Backend</div>
+                </div>
+            `;
+            document.getElementById('summaryGrid').innerHTML = summaryHTML;
+        }
+        
         function updateStocksGrid(stocks) {
             let stocksHTML = '';
             
             stocks.forEach(stock => {
                 const changeClass = stock.price_change > 0 ? 'positive' : stock.price_change < 0 ? 'negative' : 'neutral';
-                const recClass = stock.recommendation.includes('BULLISH') ? 'bullish' : 
-                               stock.recommendation.includes('BEARISH') ? 'bearish' : 'neutral-rec';
+                const recClass = stock.recommendation && stock.recommendation.includes('BULLISH') ? 'bullish' : 
+                               stock.recommendation && stock.recommendation.includes('BEARISH') ? 'bearish' : 'neutral-rec';
                 
                 stocksHTML += `
                     <div class="stock-card">
@@ -290,42 +367,67 @@
                                 <div style="color: #6c757d; font-size: 0.9em;">${stock.name}</div>
                             </div>
                             <div class="stock-price">
-                                $${stock.price.toFixed(2)}
+                                $${stock.price ? stock.price.toFixed(2) : 'N/A'}
                             </div>
                         </div>
                         
                         <div class="${changeClass}" style="text-align: center; font-size: 1.2em;">
                             ${stock.price_change > 0 ? '▲' : stock.price_change < 0 ? '▼' : '─'} 
-                            ${Math.abs(stock.price_change).toFixed(2)}%
+                            ${stock.price_change ? Math.abs(stock.price_change).toFixed(2) + '%' : 'N/A'}
                         </div>
                         
                         <div class="stock-metrics">
                             <div class="metric">
                                 <div class="metric-label">RSI</div>
-                                <div class="metric-value">${stock.rsi.toFixed(1)}</div>
+                                <div class="metric-value">${stock.rsi ? stock.rsi.toFixed(1) : 'N/A'}</div>
                             </div>
                             <div class="metric">
                                 <div class="metric-label">Sentiment</div>
-                                <div class="metric-value">${stock.sentiment_label}</div>
+                                <div class="metric-value">${stock.sentiment_label || 'N/A'}</div>
                             </div>
                             <div class="metric">
                                 <div class="metric-label">News</div>
-                                <div class="metric-value">${stock.news_count} articles</div>
+                                <div class="metric-value">${stock.news_count || 0} articles</div>
                             </div>
                             <div class="metric">
                                 <div class="metric-label">Score</div>
-                                <div class="metric-value">${stock.combined_score.toFixed(3)}</div>
+                                <div class="metric-value">${stock.combined_score ? stock.combined_score.toFixed(3) : 'N/A'}</div>
                             </div>
                         </div>
                         
                         <div class="recommendation ${recClass}">
-                            ${stock.recommendation}
+                            ${stock.recommendation || 'NO DATA'}
                         </div>
                     </div>
                 `;
             });
             
             document.getElementById('stocksGrid').innerHTML = stocksHTML;
+        }
+        
+        function showFallbackData() {
+            document.getElementById('summaryGrid').innerHTML = `
+                <div class="summary-card">
+                    <h3>Status</h3>
+                    <div class="value negative">Backend Offline</div>
+                </div>
+                <div class="summary-card">
+                    <h3>Action</h3>
+                    <div class="value">Check Railway</div>
+                </div>
+            `;
+            
+            document.getElementById('stocksGrid').innerHTML = `
+                <div class="stock-card">
+                    <div class="stock-header">
+                        <div class="stock-symbol">Backend Offline</div>
+                    </div>
+                    <div style="text-align: center; padding: 20px; color: #dc3545;">
+                        🔴 Cannot connect to backend API<br>
+                        Please check your Railway deployment
+                    </div>
+                </div>
+            `;
         }
         
         // Load data on page load
