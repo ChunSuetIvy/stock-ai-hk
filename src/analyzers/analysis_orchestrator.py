@@ -5,7 +5,6 @@ import logging
 from .technical_analyzer import EnhancedTechnicalAnalyzer
 from .sentiment_engine import EnhancedSentimentEngine
 from .risk_assessor import RiskAssessor
-
 class AnalysisOrchestrator:
     """Main orchestrator that combines all analysis components"""
     

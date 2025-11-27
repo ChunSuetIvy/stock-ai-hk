@@ -102,6 +102,8 @@ class StockAnalysisPipeline:
                 'positive_news': sentiment.get('positive_count', 0),
                 'negative_news': sentiment.get('negative_count', 0),
                 
+                'has_real_data': not self.fetcher.is_railway,  # Add this!
+                
                 # NEW FIELDS FOR ENHANCED ANALYSIS
                 'technical_score': technical.get('technical_score', 50),
                 'technical_signal': technical.get('signal', 'NEUTRAL'),
