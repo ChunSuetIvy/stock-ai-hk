@@ -6,3 +6,53 @@ Due to limitations of free real-time Hong Kong stock market APIs, this demo uses
 - Simulates market trends and volatility
 
 For production deployment with real data, integration with paid APIs like Bloomberg, Reuters, or HKEX datafeed would be required.
+
+# HK Stock AI Analysis System
+
+## 🚀 Live Demo
+- Production: https://stock-ai-hk-6wox.vercel.app
+- API Docs: https://web-production-387c9.up.railway.app/docs
+
+## 📊 Features
+- Real-time Hong Kong stock data analysis (5 major stocks)
+- AI-powered technical analysis with scoring system
+- Risk assessment (Low/Moderate/High/Very High)
+- Sentiment analysis from news articles
+- Interactive dashboard with auto-refresh
+- RESTful API with FastAPI
+
+## 🛠️ Tech Stack
+- **Backend**: Python, FastAPI, yfinance
+- **AI/ML**: Custom technical indicators, sentiment analysis
+- **Frontend**: HTML5, JavaScript, responsive design
+- **Deployment**: Railway (API), Vercel (Frontend)
+
+## 📈 Analyzed Stocks
+- 0700.HK - Tencent
+- 9988.HK - Alibaba
+- 0005.HK - HSBC
+- 0941.HK - China Mobile
+- 1299.HK - AIA Group
+
+## 🔬 Analysis Components
+1. **Technical Analysis** (60% weight)
+   - RSI, MACD, Bollinger Bands
+   - Moving averages (SMA20)
+   - Volume analysis
+
+2. **Sentiment Analysis** (40% weight)
+   - News article processing
+   - TextBlob sentiment scoring
+
+3. **Risk Assessment**
+   - Volatility analysis
+   - Support/resistance levels
+   - Combined risk scoring
+
+## 🚦 Data Sources
+- **Local Development**: Real-time data via yfinance
+- **Production**: Simulated data (due to cloud limitations)
+- **News**: NewsAPI (when API key available)
+
+Built in 3 days as a portfolio project for HK fintech opportunities.
+

@@ -41,22 +41,22 @@ class NewsCollector:
     def search_company_news(self, symbol, days_back=7):
         """Search news for a specific company"""
         if not self.api_key:
-            print("⚠️ No API key set. Get one from https://newsapi.org")
-            return []
-            
+            print("⚠️ No API key set. Using mock data.")
+            return self.get_mock_news(symbol)
         company_names = self.company_names.get(symbol, [symbol])
         all_articles = []
+        # Fix: Ensure we don't request too far back (max 28 days for safety)
+        days_back = min(days_back, 28)
         
         for name in company_names:
             params = {
-                'q': f'"{name}" stock OR shares',
+                'q': name,
                 'from': (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d'),
                 'sortBy': 'publishedAt',
                 'language': 'en',
                 'apiKey': self.api_key,
-                'pageSize': 10
-            }
-            
+                'pageSize': 5
+                }
             try:
                 response = requests.get(self.base_url, params=params, timeout=10)
                 if response.status_code == 200:
@@ -64,24 +64,19 @@ class NewsCollector:
                     articles = data.get('articles', [])
                     all_articles.extend(articles)
                     print(f"  Found {len(articles)} articles for {name}")
-                    time.sleep(0.5)  # Rate limiting
-                elif response.status_code == 426:
-                    print("⚠️ API limit reached. Using mock data for demo.")
-                    return self.get_mock_news(symbol)
                 else:
-                    print(f"  API Error {response.status_code}: {response.text}")
+                    print(f"  API Error {response.status_code}: {response.json().get('message', 'Unknown error')}")
+                    return self.get_mock_news(symbol)
             except Exception as e:
-                print(f"  Error fetching news: {str(e)}")
-                
-        # Remove duplicates by title
-        unique_articles = {}
-        for article in all_articles:
-            title = article.get('title', '')
-            if title and title not in unique_articles:
-                unique_articles[title] = article
-                
-        return list(unique_articles.values())
-    
+                print(f"  Error: {str(e)}")
+                return self.get_mock_news(symbol)
+        # If no articles, return mock
+        if not all_articles:
+            return self.get_mock_news(symbol)
+        
+        return all_articles
+
+
     def get_mock_news(self, symbol):
         """Return mock news for testing when API is not available"""
         mock_templates = {
